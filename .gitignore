@@ -31,3 +31,14 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# MySQL 数据目录
+docker-env/mysql/data/
+docker-env/mysql/logs/
+
+# Socket 文件
+*.sock
+
+# MySQL 临时文件
+*.pid
+*.err
