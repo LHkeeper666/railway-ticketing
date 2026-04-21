@@ -15,7 +15,7 @@ import lombok.NoArgsConstructor;
  * </p>
  *
  * @author jack
- * @since 2026-04-18
+ * @since 2026-04-21
  */
 @Data
 @NoArgsConstructor
@@ -34,14 +34,14 @@ public class TrainStationRelation extends BaseEntity {
     /**
      * 出发站点
      */
-    @TableField("departure")
-    private String departure;
+    @TableField("departure_station")
+    private String departureStation;
 
     /**
      * 到达站点
      */
-    @TableField("arrival")
-    private String arrival;
+    @TableField("arrival_station")
+    private String arrivalStation;
 
     /**
      * 起始城市名称
