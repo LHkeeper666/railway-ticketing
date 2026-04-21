@@ -33,14 +33,14 @@ public class TrainStationPrice extends BaseEntity {
     /**
      * 出发站点
      */
-    @TableField("departure_station")
-    private String departureStation;
+    @TableField("start_station")
+    private String startStation;
 
     /**
      * 到达站点
      */
-    @TableField("arrival_station")
-    private String arrivalStation;
+    @TableField("end_station")
+    private String endStation;
 
     /**
      * 座位类型

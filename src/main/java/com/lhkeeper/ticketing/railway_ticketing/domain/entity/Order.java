@@ -65,14 +65,14 @@ public class Order extends BaseEntity {
     /**
      * 出发站点
      */
-    @TableField("departure")
-    private String departure;
+    @TableField("start_station")
+    private String startStation;
 
     /**
      * 到达站点
      */
-    @TableField("arrival")
-    private String arrival;
+    @TableField("end_station")
+    private String endStation;
 
     /**
      * 出发时间

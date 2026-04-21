@@ -46,14 +46,14 @@ public class TrainStation extends BaseEntity {
     /**
      * 出发站点
      */
-    @TableField("departure_station")
-    private String departureStation;
+    @TableField("start_station")
+    private String startStation;
 
     /**
      * 到达站点
      */
-    @TableField("arrival_station")
-    private String arrivalStation;
+    @TableField("end_station")
+    private String endStation;
 
     /**
      * 起始城市
@@ -68,16 +68,16 @@ public class TrainStation extends BaseEntity {
     private String endRegion;
 
     /**
-     * 到站时间
-     */
-    @TableField("arrival_time")
-    private LocalDateTime arrivalTime;
-
-    /**
      * 出站时间
      */
     @TableField("departure_time")
     private LocalDateTime departureTime;
+
+    /**
+     * 到站时间
+     */
+    @TableField("arrival_time")
+    private LocalDateTime arrivalTime;
 
     /**
      * 停留时间，单位分

@@ -27,14 +27,14 @@ public class Station extends BaseEntity {
     /**
      * 车站编号
      */
-    @TableField("code")
-    private String code;
+    @TableField("station_code")
+    private String stationCode;
 
     /**
      * 车站名称
      */
-    @TableField("name")
-    private String name;
+    @TableField("station_name")
+    private String stationName;
 
     /**
      * 拼音
@@ -45,8 +45,8 @@ public class Station extends BaseEntity {
     /**
      * 车站地区
      */
-    @TableField("region")
-    private String region;
+    @TableField("region_code")
+    private String regionCode;
 
     /**
      * 车站地区名称
