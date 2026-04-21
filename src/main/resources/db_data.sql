@@ -76,7 +76,7 @@ VALUES (1, '北京', '北京市', 'BJP', 'B', 'beijing', '2023-06-01 20:50:00', 
        (7, '嘉兴', '嘉兴市', 'JXH', 'J', 'jiaxing', '2023-06-01 20:50:00', '2023-06-01 20:50:00', 0),
        (8, '海宁', '海宁市', 'HNH', 'H', 'haining', '2023-06-01 20:50:00', '2023-06-01 20:50:00', 0);
 
-INSERT INTO `t_station` (`id`, `code`, `name`, `spell`, `region`, `region_name`, `create_time`, `update_time`,
+INSERT INTO `t_station` (`id`, `station_code`, `station_name`, `spell`, `region_code`, `region_name`, `create_time`, `update_time`,
                          `del_flag`)
 VALUES (1, 'VNP', '北京南', 'beijingnan', 'BJP', '北京', '2023-06-01 20:54:00', '2023-06-01 20:54:00', 0),
        (2, 'JGK', '济南西', 'jinanxi', 'JNK', '济南', '2023-06-01 20:54:00', '2023-06-01 20:54:00', 0),
@@ -102,7 +102,7 @@ VALUES (1, 'G35', 0, '0,1,2', '0,6', '北京南', '宁波', '北京', '宁波', 
        (4, 'Z284', 2, '0', '6', '北京', '杭州', '北京', '杭州', '2023-05-15 14:30:00', 0, '2023-06-01 18:56:00',
         '2023-06-02 10:57:00', '2023-06-01 20:45:00', '2023-06-01 20:45:00', 0);
 
-INSERT INTO `t_train_station` (`id`, `train_id`, `station_id`, `sequence`, `departure_station`, `arrival_station`, `start_region`,
+INSERT INTO `t_train_station` (`id`, `train_id`, `station_id`, `sequence`, `start_station`, `end_station`, `start_region`,
                                `end_region`, `arrival_time`, `departure_time`, `stopover_time`, `create_time`,
                                `update_time`, `del_flag`)
 VALUES (1, 1, 1, '01', '北京南', '济南西', '北京', '济南', '2023-06-01 09:56:00', '2023-06-01 09:56:00', NULL,
@@ -138,7 +138,7 @@ VALUES (1, 1, 1, '01', '北京南', '济南西', '北京', '济南', '2023-06-01
        (16, 4, 4, '02', '杭州东', '', '北京', '', '2023-06-01 18:56:00', '2023-06-02 10:57:00', NULL,
         '2023-07-08 14:05:05', '2023-07-08 14:05:05', 0);
 
-INSERT INTO `t_train_station_price` (`id`, `train_id`, `departure_station`, `arrival_station`, `seat_type`, `price`, `create_time`,
+INSERT INTO `t_train_station_price` (`id`, `train_id`, `start_station`, `end_station`, `seat_type`, `price`, `create_time`,
                                      `update_time`, `del_flag`)
 VALUES (1664877136352866304, 1, '北京南', '济南西', 0, 78200, '2023-06-03 14:10:16', '2023-06-03 14:10:16', 0),
        (1664877136424169472, 1, '北京南', '济南西', 1, 35700, '2023-06-03 14:10:16', '2023-06-03 14:10:16', 0),
@@ -244,7 +244,7 @@ VALUES (1664877136352866304, 1, '北京南', '济南西', 0, 78200, '2023-06-03 
        (1677692017337769984, 4, '北京南', '杭州东', 8, 52900, '2023-07-08 22:52:02', '2023-07-08 22:52:02', 0),
        (1677692017354547200, 4, '北京南', '杭州东', 13, 32800, '2023-07-08 22:52:02', '2023-07-08 22:52:02', 0);
 
-INSERT INTO `t_train_station_relation` (`id`, `train_id`, `departure_station`, `arrival_station`, `start_region`, `end_region`,
+INSERT INTO `t_train_station_relation` (`id`, `train_id`, `start_station`, `end_station`, `start_region`, `end_region`,
                                         `departure_flag`, `arrival_flag`, `departure_time`, `arrival_time`,
                                         `create_time`, `update_time`, `del_flag`)
 VALUES (1665025584123056128, 1, '北京南', '济南西', '北京', '济南', 1, 0, '2023-06-01 09:56:00', '2023-06-01 11:19:00',
