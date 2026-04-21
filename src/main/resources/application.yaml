@@ -4,7 +4,10 @@ spring:
     name: railway-ticketing
 
   datasource:
-    url: jdbc:mysql://localhost:3306/test?useSSL=false&serverTimezone=UTC
+    url: jdbc:mysql://localhost:3306/railway_ticketing?useSSL=false&serverTimezone=UTC
     username: root
-    password: new_password
+    password: root
     driver-class-name: com.mysql.cj.jdbc.Driver
+#  sql:
+#    init:
+#      mode: always
