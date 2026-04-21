@@ -118,8 +118,8 @@ CREATE TABLE `t_train_station_relation`
 (
     `id`             bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',
     `train_id`       bigint(20) DEFAULT NULL COMMENT '车次ID',
-    `departure`      varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '出发站点',
-    `arrival`        varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '到达站点',
+    `departure_station`      varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '出发站点',
+    `arrival_station`        varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '到达站点',
     `start_region`   varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '起始城市名称',
     `end_region`     varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '终点城市名称',
     `departure_flag` tinyint(1) DEFAULT NULL COMMENT '始发标识',
