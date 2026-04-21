@@ -1,6 +1,7 @@
 package com.lhkeeper.ticketing.railway_ticketing.service;
 
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.TicketPageQueryReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.TicketPageQueryRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Ticket;
 import com.baomidou.mybatisplus.extension.service.IService;
 
@@ -14,6 +15,6 @@ import com.baomidou.mybatisplus.extension.service.IService;
  */
 public interface TicketService extends IService<Ticket> {
 
-    void queryTicketByPage(TicketPageQueryReqDTO ticketPageQueryReqDTO);
+    TicketPageQueryRespDTO queryTicketByPage(TicketPageQueryReqDTO ticketPageQueryReqDTO);
 
 }

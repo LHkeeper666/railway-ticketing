@@ -14,12 +14,12 @@ public class TicketPageQueryReqDTO extends PageRequest {
     /**
      * 出发地 Code
      */
-    private String fromRegion;
+    private String startRegionCode;
 
     /**
      * 目的地 Code
      */
-    private String toRegion;
+    private String endRegionCode;
 
     /**
      * 出发日期

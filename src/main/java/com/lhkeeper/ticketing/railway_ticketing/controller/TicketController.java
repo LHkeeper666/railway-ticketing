@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.TicketPageQueryReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.TicketPageQueryRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.service.TicketService;
 
 import org.springframework.web.bind.annotation.RequestParam;
@@ -33,10 +34,8 @@ public class TicketController {
     }
 
     @GetMapping("/query")
-    public String ticketQuery(@RequestParam TicketPageQueryReqDTO ticketPageQueryReqDTO) {
-        // TODO:
-        ticketService.queryTicketByPage(ticketPageQueryReqDTO);
-        return new String();
+    public TicketPageQueryRespDTO ticketQuery(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
+        return ticketService.queryTicketByPage(ticketPageQueryReqDTO);
     }
     
     
