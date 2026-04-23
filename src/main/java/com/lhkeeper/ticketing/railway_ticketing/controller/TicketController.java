@@ -1,5 +1,6 @@
 package com.lhkeeper.ticketing.railway_ticketing.controller;
 
+import com.lhkeeper.ticketing.railway_ticketing.common.result.Result;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -34,8 +35,8 @@ public class TicketController {
     }
 
     @GetMapping("/query")
-    public TicketPageQueryRespDTO ticketQuery(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
-        return ticketService.queryTicketByPage(ticketPageQueryReqDTO);
+    public Result<TicketPageQueryRespDTO> ticketQuery(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
+        return Result.success(ticketService.queryTicketByPage(ticketPageQueryReqDTO));
     }
     
     
