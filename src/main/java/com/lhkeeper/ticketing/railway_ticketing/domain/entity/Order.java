@@ -7,6 +7,7 @@ import java.io.Serializable;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -19,6 +20,7 @@ import lombok.NoArgsConstructor;
  * @since 2026-04-21
  */
 @Data
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
 @TableName("t_order")

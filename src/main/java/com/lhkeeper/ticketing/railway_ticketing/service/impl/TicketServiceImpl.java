@@ -1,10 +1,11 @@
 package com.lhkeeper.ticketing.railway_ticketing.service.impl;
 
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.SeatClassDTO;
-import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TrainService;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TrainServiceDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.TicketPageQueryReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.TicketPageQueryRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TicketMapper;
 import com.lhkeeper.ticketing.railway_ticketing.service.TicketService;
@@ -14,9 +15,9 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
 import java.math.BigDecimal;
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Service;
  * @since 2026-04-18
  */
 @Service
+@RequiredArgsConstructor
 public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> implements TicketService {
 
     private final TicketMapper ticketMapper;
@@ -36,21 +38,9 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
     private final SeatMapper seatMapper;
     private final TrainStationRelationMapper trainStationRelationMapper;
 
-    public TicketServiceImpl(
-            TicketMapper ticketMapper, StationMapper stationMapper,
-            TrainStationRelationMapper trainStationRelationMapper,
-            TrainMapper trainMapper, SeatMapper seatMapper) {
-        super();
-        this.ticketMapper = ticketMapper;
-        this.stationMapper = stationMapper;
-        this.trainStationRelationMapper = trainStationRelationMapper;
-        this.trainMapper = trainMapper;
-        this.seatMapper = seatMapper;
-    }
-
     @Override
     public TicketPageQueryRespDTO queryTicketByPage(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
-        List<TrainService> trainServices = null;
+        List<TrainServiceDTO> trainServices = null;
         // 获取区域
         LambdaQueryWrapper<Station> queryWrapper = Wrappers.lambdaQuery(Station.class)
                 .eq(Station::getStationCode, ticketPageQueryReqDTO.getStartRegionCode());
@@ -66,7 +56,7 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
         List<TrainStationRelation> trainStationRelation = trainStationRelationMapper.selectList(queryWrapper3);
 
         // 复制
-        trainServices = trainStationRelation.stream().map(each -> TrainService.builder()
+        trainServices = trainStationRelation.stream().map(each -> TrainServiceDTO.builder()
                 .arrivalFlag(each.getArrivalFlag())
                 .departureFlag(each.getDepartureFlag())
                 .endStation(each.getEndStation())
@@ -78,10 +68,10 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                 .endRegion(each.getEndRegion())
                 .build()).toList();
 
-        // train_number
+        // 获取 train_number
         // 1. 收集所有 trainId
         Set<Long> trainIds = trainServices.stream()
-                .map(TrainService::getTrainId)
+                .map(TrainServiceDTO::getTrainId)
                 .collect(Collectors.toSet());
 
         // 2. 一次性查询
@@ -101,10 +91,11 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
             each.setTrainBrand(trainIdMap.get(each.getTrainId()).getTrainBrand());
         });
 
-        // seat_class_list
+        // 获取 seat_class_list
         List<Seat> allSeats = seatMapper.selectList(
                 Wrappers.lambdaQuery(Seat.class)
                         .in(Seat::getTrainId, trainIds)
+                        .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
         );
 
         Map<String, List<Seat>> seatGroupMap =
@@ -114,7 +105,7 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                         seat.getEndStation()
                 ));
 
-        for (TrainService each : trainServices) {
+        for (TrainServiceDTO each : trainServices) {
 
             String key = each.getTrainId() + "_" +
                     each.getStartStation() + "_" +
@@ -122,28 +113,21 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
 
             List<Seat> seats = seatGroupMap.getOrDefault(key, List.of());
 
-            // seatType -> count
-            Map<Integer, Long> seatTypeToCountMap =
-                    seats.stream().collect(Collectors.groupingBy(
-                            Seat::getSeatType,
-                            Collectors.counting()
-                    ));
-
             Map<Integer, List<Seat>> seatTypeToSeatsMap =
                     seats.stream()
                             .collect(Collectors.groupingBy(Seat::getSeatType));
 
             // 组装 seatClassList
             List<SeatClassDTO> seatClassDTOList = seatTypeToSeatsMap.entrySet()
-                    .stream().map(entry -> new SeatClassDTO(
-                            entry.getKey(),
-                            entry.getValue().size(),
-                            BigDecimal.valueOf(entry.getValue().get(0).getPrice())
-                    )).toList();
+                    .stream().map(entry -> SeatClassDTO.builder()
+                            .type(entry.getKey())
+                            .quantity(entry.getValue().size())
+                            .price(BigDecimal.valueOf(entry.getValue().get(0).getPrice()))
+                            .build()
+                    ).toList();
 
             each.setSeatClassList(seatClassDTOList);
         }
-
 
         return TicketPageQueryRespDTO.builder()
                 .trainServiceList(trainServices)

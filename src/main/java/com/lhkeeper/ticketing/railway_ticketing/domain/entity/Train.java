@@ -25,6 +25,8 @@ public class Train extends BaseEntity {
 
     private static final long serialVersionUID = 1L;
 
+    private Long id;
+
     /**
      * 列车车次
      */

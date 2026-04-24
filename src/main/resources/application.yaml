@@ -11,3 +11,14 @@ spring:
 #  sql:
 #    init:
 #      mode: always
+
+logging:
+  level:
+    root: INFO
+    com.lhkeeper.ticketing.railway_ticketing: DEBUG
+    com.baomidou.mybatisplus: DEBUG
+    org.mybatis: DEBUG
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

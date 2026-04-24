@@ -90,5 +90,10 @@ public class Result<T> implements Serializable {
                 .setCode(errorCode)
                 .setMessage(errorMessage);
     }
+
+    public static Result<Void> fail(String errorMessage) {
+        return new Result<Void>()
+                .setMessage(errorMessage);
+    }
 }
 

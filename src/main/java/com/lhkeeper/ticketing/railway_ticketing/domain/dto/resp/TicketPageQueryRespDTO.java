@@ -2,8 +2,7 @@ package com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp;
 
 import java.util.List;
 
-import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TrainService;
-import com.lhkeeper.ticketing.railway_ticketing.domain.entity.TrainStationRelation;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TrainServiceDTO;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -12,9 +11,6 @@ import lombok.NoArgsConstructor;
 
 /**
  * 车票分页查询响应实体
- *
- * 1. relation（）
- * 2. 座位数（分等级）
  */
 @Data
 @Builder
@@ -42,7 +38,7 @@ public class TicketPageQueryRespDTO {
      */
     // private List<String> endStationList;
 
-    private List<TrainService> trainServiceList;
+    private List<TrainServiceDTO> trainServiceList;
 
     /**
      * 车次席别

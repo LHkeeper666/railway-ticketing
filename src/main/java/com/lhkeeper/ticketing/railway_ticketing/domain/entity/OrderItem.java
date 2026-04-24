@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.BaseEntity;
 import java.io.Serializable;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -17,6 +18,7 @@ import lombok.NoArgsConstructor;
  * @since 2026-04-21
  */
 @Data
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
 @TableName("t_order_item")

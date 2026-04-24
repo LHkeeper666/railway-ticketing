@@ -8,11 +8,14 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 import java.util.List;
 
+/**
+ * 车次实体
+ */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class TrainService {
+public class TrainServiceDTO {
 
     private static final long serialVersionUID = 1L;
 
