@@ -1,6 +1,5 @@
 package com.lhkeeper.ticketing.railway_ticketing.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
@@ -8,11 +7,13 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
-import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatus;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
+import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.select.SeatSelector;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -32,11 +33,13 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final SeatSelector seatSelector;
     private final OrderItemMapper orderItemMapper;
     private final TicketMapper ticketMapper;
+    private final AbstractChainContext<OrderCreateReqDTO> chainContext;
 
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public OrderCreateRespDTO createOrder(OrderCreateReqDTO reqDTO) {
         // TODO: 参数检验
+        chainContext.handler(ChainMarkEnum.ORDER_CREATE.name(), reqDTO);
 
         // 创建订单
         Order order = Order.builder()
@@ -61,7 +64,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                                 .eq(TrainStation::getTrainId, reqDTO.getTrainId())
                                 .eq(TrainStation::getStartStation, reqDTO.getEndStation())
                 ).getArrivalTime())
-                .status(OrderStatus.UNPAID.getCode())
+                .status(OrderStatusEnum.UNPAID.getCode())
                 .build();
 
         // 选择并锁定座位

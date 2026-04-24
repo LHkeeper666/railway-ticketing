@@ -1,6 +1,6 @@
 package com.lhkeeper.ticketing.railway_ticketing.domain.enums;
 
-public enum OrderStatus {
+public enum OrderStatusEnum {
 
     UNPAID(0),
     PAID(1),
@@ -8,7 +8,7 @@ public enum OrderStatus {
 
     private final Integer code;
 
-    OrderStatus(Integer code) {
+    OrderStatusEnum(Integer code) {
         this.code = code;
     }
 

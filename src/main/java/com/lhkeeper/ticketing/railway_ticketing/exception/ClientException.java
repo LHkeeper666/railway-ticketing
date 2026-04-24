@@ -1,8 +1,8 @@
 package com.lhkeeper.ticketing.railway_ticketing.exception;
 
-public class ServiceException extends RuntimeException {
+public class ClientException extends RuntimeException {
     private static final long serialVersionUID = 1L;
-    public ServiceException(String message) {
+    public ClientException(String message) {
         super(message);
     }
 }
