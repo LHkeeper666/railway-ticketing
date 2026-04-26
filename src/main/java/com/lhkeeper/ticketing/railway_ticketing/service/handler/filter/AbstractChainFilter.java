@@ -7,7 +7,7 @@ import org.springframework.core.Ordered;
  *
  * @param <T>
  */
-public interface AbstractChainHandler<T> extends Ordered {
+public interface AbstractChainFilter<T> extends Ordered {
 
     /**
      * 执行责任链逻辑

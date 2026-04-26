@@ -61,6 +61,7 @@ CREATE TABLE `t_station`
 CREATE TABLE `t_ticket`
 (
     `id`              bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',
+    `order_sn`        varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '订单号',
     `username`        varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '用户名',
     `train_id`        bigint(20) DEFAULT NULL COMMENT '列车ID',
     `carriage_number` varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '车厢号',

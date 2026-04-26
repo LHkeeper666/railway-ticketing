@@ -21,5 +21,6 @@ public class BaseEntity {
 
     /** 逻辑删除标识：0-未删 1-已删 */
     @TableLogic
+    @TableField(fill = FieldFill.INSERT)
     private Integer delFlag;
 }

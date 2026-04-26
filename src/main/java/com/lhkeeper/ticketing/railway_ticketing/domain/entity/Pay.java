@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.BaseEntity;
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -18,6 +20,7 @@ import lombok.NoArgsConstructor;
  * @since 2026-04-21
  */
 @Data
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
 @TableName("t_pay")
@@ -71,7 +74,7 @@ public class Pay extends BaseEntity {
      * 交易总金额
      */
     @TableField("total_amount")
-    private Integer totalAmount;
+    private BigDecimal totalAmount;
 
     /**
      * 三方交易凭证号

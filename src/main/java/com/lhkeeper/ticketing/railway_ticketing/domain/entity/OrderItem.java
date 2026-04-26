@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.BaseEntity;
 import java.io.Serializable;
+import java.math.BigDecimal;
+
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -108,5 +110,5 @@ public class OrderItem extends BaseEntity {
      * 订单金额
      */
     @TableField("amount")
-    private Integer amount;
+    private BigDecimal amount;
 }

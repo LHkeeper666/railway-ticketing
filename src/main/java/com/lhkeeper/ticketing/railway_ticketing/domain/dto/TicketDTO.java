@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
+
 @Data
 @Builder
 @AllArgsConstructor
@@ -57,5 +59,5 @@ public class TicketDTO {
     /**
      * 座位金额
      */
-    private Integer amount;
+    private BigDecimal amount;
 }

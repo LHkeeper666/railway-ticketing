@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.BaseEntity;
 import java.io.Serializable;
+import java.math.BigDecimal;
+
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -64,7 +66,7 @@ public class Seat extends BaseEntity {
      * 车票价格
      */
     @TableField("price")
-    private Integer price;
+    private BigDecimal price;
 
     /**
      * 座位状态

@@ -33,6 +33,12 @@ public class Ticket extends BaseEntity {
     private String username;
 
     /**
+     * 订单号
+     */
+    @TableField("order_sn")
+    private String orderSn;
+
+    /**
      * 列车ID
      */
     @TableField("train_id")

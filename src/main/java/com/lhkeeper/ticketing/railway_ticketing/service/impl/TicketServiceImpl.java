@@ -5,6 +5,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TrainServiceDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.TicketPageQueryReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.TicketPageQueryRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TicketMapper;
@@ -17,6 +18,8 @@ import java.math.BigDecimal;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
+import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -37,9 +40,12 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
     private final TrainMapper trainMapper;
     private final SeatMapper seatMapper;
     private final TrainStationRelationMapper trainStationRelationMapper;
+    private final AbstractChainContext<TicketPageQueryReqDTO> ticketPageQueryContext;
 
     @Override
     public TicketPageQueryRespDTO queryTicketByPage(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
+        ticketPageQueryContext.handler(ChainMarkEnum.TICKET_QUERY.name(), ticketPageQueryReqDTO);
+
         List<TrainServiceDTO> trainServices = null;
         // 获取区域
         LambdaQueryWrapper<Station> queryWrapper = Wrappers.lambdaQuery(Station.class)
@@ -122,7 +128,7 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                     .stream().map(entry -> SeatClassDTO.builder()
                             .type(entry.getKey())
                             .quantity(entry.getValue().size())
-                            .price(BigDecimal.valueOf(entry.getValue().get(0).getPrice()))
+                            .price(entry.getValue().get(0).getPrice())
                             .build()
                     ).toList();
 

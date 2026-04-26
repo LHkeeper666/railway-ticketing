@@ -12,4 +12,6 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
 public interface OrderService extends IService<Order> {
 
     public OrderCreateRespDTO createOrder(OrderCreateReqDTO reqDTO);
+
+    public void payOrder(String orderSn);
 }

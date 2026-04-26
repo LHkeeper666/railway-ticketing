@@ -3,6 +3,8 @@ package com.lhkeeper.ticketing.railway_ticketing.domain.dto;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
+
 /**
  * 订单乘车人车票详情
  */
@@ -48,5 +50,5 @@ public class OrderItemDTO {
     /**
      * 订单金额
      */
-    private Integer amount;
+    private BigDecimal amount;
 }

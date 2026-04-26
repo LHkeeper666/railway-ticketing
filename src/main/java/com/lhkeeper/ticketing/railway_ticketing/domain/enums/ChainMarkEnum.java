@@ -10,5 +10,10 @@ public enum ChainMarkEnum {
     /**
      * 车票查询过滤器
      */
-    TICKET_QUERY;
+    TICKET_QUERY,
+
+    /**
+     * 订单支付过滤器
+     */
+    ORDER_PAY;
 }

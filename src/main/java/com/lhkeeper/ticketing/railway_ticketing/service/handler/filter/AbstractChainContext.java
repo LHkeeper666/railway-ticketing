@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
 @Component
 public final class AbstractChainContext<T> implements CommandLineRunner {
 
-    private final Map<String, List<AbstractChainHandler>> abstractChainHandlerContainer = new HashMap<>();
+    private final Map<String, List<AbstractChainFilter>> abstractChainHandlerContainer = new HashMap<>();
 
     private final ApplicationContext applicationContext;
 
@@ -24,7 +24,7 @@ public final class AbstractChainContext<T> implements CommandLineRunner {
     }
 
     public void handler(String mark, T requestParam) {
-        List<AbstractChainHandler> chainHandlers = abstractChainHandlerContainer.get(mark);
+        List<AbstractChainFilter> chainHandlers = abstractChainHandlerContainer.get(mark);
         if (CollectionUtils.isEmpty(chainHandlers)) {
             throw new RuntimeException(String.format("[%s] Chain of Responsibility ID is undefined.", mark));
         }
@@ -33,18 +33,18 @@ public final class AbstractChainContext<T> implements CommandLineRunner {
 
     @Override
     public final void run(final String... args) {
-        Map<String, AbstractChainHandler> chainFilterMap = applicationContext
-                .getBeansOfType(AbstractChainHandler.class);
+        Map<String, AbstractChainFilter> chainFilterMap = applicationContext
+                .getBeansOfType(AbstractChainFilter.class);
         chainFilterMap.forEach((beanName, chainHandler) -> {
-            List<AbstractChainHandler> abstractChainHandlers = abstractChainHandlerContainer.get(chainHandler.mark());
-            if (abstractChainHandlers == null) {
-                abstractChainHandlers = new ArrayList<>();
+            List<AbstractChainFilter> abstractChainFilters = abstractChainHandlerContainer.get(chainHandler.mark());
+            if (abstractChainFilters == null) {
+                abstractChainFilters = new ArrayList<>();
             }
-            abstractChainHandlers.add(chainHandler);
-            List<AbstractChainHandler> actualAbstractChainHandlers = abstractChainHandlers.stream()
+            abstractChainFilters.add(chainHandler);
+            List<AbstractChainFilter> actualAbstractChainFilters = abstractChainFilters.stream()
                     .sorted(Comparator.comparing(Ordered::getOrder))
                     .collect(Collectors.toList());
-            abstractChainHandlerContainer.put(chainHandler.mark(), actualAbstractChainHandlers);
+            abstractChainHandlerContainer.put(chainHandler.mark(), actualAbstractChainFilters);
         });
     }
 }
