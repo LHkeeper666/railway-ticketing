@@ -13,3 +13,22 @@ services:
       - ./mysql/data:/var/lib/mysql
     command:
       --default-authentication-plugin=mysql_native_password
+
+  redis:
+    image: redis:latest
+    container_name: redis-server
+    ports:
+      - "6379:6379"   # 映射容器的6379端口到主机的6379端口
+    volumes:
+      - redis-data:/data  # 将Redis的数据目录挂载到本地
+    networks:
+      - redis-network
+    restart: always   # 容器崩溃后自动重启
+
+volumes:
+  redis-data:  # 持久化存储
+    driver: local
+
+networks:
+  redis-network:
+    driver: bridge

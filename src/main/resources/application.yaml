@@ -12,13 +12,20 @@ spring:
 #    init:
 #      mode: always
 
-logging:
-  level:
-    root: INFO
-    com.lhkeeper.ticketing.railway_ticketing: DEBUG
-    com.baomidou.mybatisplus: DEBUG
-    org.mybatis: DEBUG
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DATABASE:0}
 
-mybatis-plus:
-  configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+#logging:
+#  level:
+#    root: INFO
+#    com.lhkeeper.ticketing.railway_ticketing: DEBUG
+#    com.baomidou.mybatisplus: INFO
+#    org.mybatis: DEBUG
+
+#mybatis-plus:
+#  configuration:
+#    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

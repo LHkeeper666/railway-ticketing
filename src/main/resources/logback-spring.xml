@@ -28,4 +28,12 @@
         <appender-ref ref="CONSOLE" />
         <appender-ref ref="APP_LOG" />
     </root>
+
+    <!-- 设定 MyBatis 的 SQL 输出日志级别 -->
+    <logger name="com.baomidou.mybatisplus" level="INFO" />
+    <logger name="org.apache.ibatis" level="INFO" />
+    <logger name="org.mybatis.spring" level="INFO" />
+
+    <!-- 设定 MyBatis-Plus SQL 输出的日志级别 -->
+    <logger name="com.baomidou.mybatisplus.extension" level="ERROR" />
 </configuration>
