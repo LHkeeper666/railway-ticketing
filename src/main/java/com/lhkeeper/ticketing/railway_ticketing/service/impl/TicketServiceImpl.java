@@ -9,6 +9,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.TicketPageQueryR
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TicketMapper;
 import com.lhkeeper.ticketing.railway_ticketing.service.TicketService;
@@ -16,11 +17,11 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.cache.CacheProperties;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -36,13 +37,14 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> implements TicketService {
 
-    private final TicketMapper ticketMapper;
-    private final StationMapper stationMapper;
     private final TrainMapper trainMapper;
     private final SeatMapper seatMapper;
+    private final RegionMapper regionMapper;
     private final TrainStationRelationMapper trainStationRelationMapper;
     private final AbstractChainContext<TicketPageQueryReqDTO> ticketPageQueryContext;
     private final StringRedisTemplate stringRedisTemplate;
+
+    private static final String LOCK_KEY_PREFIX = "lock:ticket:";
 
     @Override
     public TicketPageQueryRespDTO queryTicketByPage(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
@@ -51,29 +53,24 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
 
         List<TrainServiceDTO> trainServices = null;
         // 获取区域name
-        List<String> buildRegionCodeToNameKeys = new ArrayList<>();
-        buildRegionCodeToNameKeys.add(ticketPageQueryReqDTO.getStartRegionCode());
-        buildRegionCodeToNameKeys.add(ticketPageQueryReqDTO.getEndRegionCode());
-        buildRegionCodeToNameKeys =  buildRegionCodeToNameKeys.stream().map(each -> String.format(
-                RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, each)).toList();
+        List<String> buildRegionCodeToNameKeys = Arrays.asList(
+                String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, ticketPageQueryReqDTO.getStartRegionCode()),
+                String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, ticketPageQueryReqDTO.getEndRegionCode())
+        );
 
         List<String> regionNames = stringRedisTemplate.opsForValue().multiGet(buildRegionCodeToNameKeys);
+
+        // 在抽象责任链中已经保证不为null了
+//        if (regionNames == null || regionNames.contains(null)) {
+//            List<Region> regions = regionMapper.selectList(Wrappers.emptyWrapper());
+//            Map<String, String> codeToNameMap = regions.stream().collect(Collectors.toMap(
+//                    region -> String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, region.getCode()),
+//                    Region::getName));
+//            stringRedisTemplate.opsForValue().multiSet(codeToNameMap);
+//            regionNames = stringRedisTemplate.opsForValue().multiGet(buildRegionCodeToNameKeys);
+//        }
         String startRegionName = regionNames.get(0);
         String endRegionName = regionNames.get(1);
-
-        if (startRegionName == null || endRegionName == null) {
-            List<Station> stations = stationMapper.selectList(Wrappers.lambdaQuery(Station.class));
-
-            Map<String, String> regionCodeToNameMap = stations.stream().collect(Collectors.toMap(
-                    station -> String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, station.getRegionCode()),
-                    Station::getRegionName,
-                    (existingValue, newValue) -> newValue
-            ));
-            stringRedisTemplate.opsForValue().multiSet(regionCodeToNameMap);
-            regionNames = stringRedisTemplate.opsForValue().multiGet(buildRegionCodeToNameKeys);
-            startRegionName = regionNames.get(0);
-            endRegionName = regionNames.get(1);
-        }
 
         // 根据区域name查询车次
         String buildTrainStationRelationHashKey = String.format(RedisConstant.TRAIN_STATION_RELATION_MAPPING, startRegionName, endRegionName);
@@ -90,7 +87,16 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                     trainStationRelation -> String.format(RedisConstant.TRAINID_TO_STATION_RELATION_MAPPING, trainStationRelation.getTrainId()),
                     JSON::toJSONString
             ));
-            stringRedisTemplate.opsForHash().putAll(buildTrainStationRelationHashKey, trainStationRelationMap);
+            String lockKey = LOCK_KEY_PREFIX + "station_relation";
+            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 10, TimeUnit.SECONDS));
+            if (!lockAcquired) {
+                throw new ServiceException("系统正忙，请稍后重试");
+            }
+            try {
+                stringRedisTemplate.opsForHash().putAll(buildTrainStationRelationHashKey, trainStationRelationMap);
+            } finally {
+                stringRedisTemplate.delete(lockKey);
+            }
         }
         trainStationRelations = (trainStationRelations == null)?
                 trainStationRelationMap.values().stream().map(each -> JSON.parseObject(each.toString(), TrainStationRelation.class)).collect(Collectors.toList()):
@@ -111,53 +117,47 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
 
         // 获取 train_number
         // 1. 收集所有 trainId
-        Set<Long> trainIds = trainServices.stream()
-                .map(TrainServiceDTO::getTrainId)
-                .collect(Collectors.toSet());
+        Set<Long> trainIds = trainServices.stream().map(TrainServiceDTO::getTrainId).collect(Collectors.toSet());
 
         // 2. 构造 Redis 键
         List<String> buildTrainInfoHashKeys = trainIds.stream()
                 .map(each -> String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, each))
                 .collect(Collectors.toList());
 
-        // 3. 一次性查询 Redis 中的数据
         List<String> trainJSONStrings = stringRedisTemplate.opsForValue().multiGet(buildTrainInfoHashKeys);
+        Map<Long, Train> trainIdMap = new HashMap<>();
 
-        // 4. 统计为 null 的数量
-        long count = trainJSONStrings.stream().filter(Objects::isNull).count();
-
-        // 5. 如果有部分数据为 null，从数据库中获取并缓存到 Redis
-        Map<Long, Train> trainIdMap = null;
-        if (count > 0) {
-            // 从数据库中查询缺失的数据
-            trainIdMap = trainMapper.selectByIds(trainIds).stream()
-                    .collect(Collectors.toMap(Train::getId, each -> each));
-
-            // 将从数据库中查询到的数据存入 Redis
-            Map<String, String> redisData = trainIdMap.entrySet().stream()
-                    .collect(Collectors.toMap(
-                            entry -> String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, entry.getKey()), // 构造 Redis 键
-                            entry -> JSON.toJSONString(entry.getValue()) // 将 Train 对象转换为 JSON 字符串
-                    ));
-            stringRedisTemplate.opsForValue().multiSet(redisData);
+        // 过滤出已存在的 Redis 数据
+        List<Long> existingTrainIds = new ArrayList<>();
+        for (int i = 0; i < trainJSONStrings.size(); i++) {
+            if (trainJSONStrings.get(i) != null) {
+                Train train = JSON.parseObject(trainJSONStrings.get(i), Train.class);
+                trainIdMap.put(train.getId(), train);
+                existingTrainIds.add(train.getId());
+            }
         }
 
-        // 6. 如果 Redis 中没有找到数据，使用数据库的数据，或者使用 Redis 中的数据
-        trainIdMap = (trainIdMap == null) ?
-                trainJSONStrings.stream()
-                        .filter(Objects::nonNull)
-                        .map(each -> JSON.parseObject(each, Train.class))
-                        .collect(Collectors.toMap(Train::getId, train -> train)) :
-                trainIdMap;
+        // 只查询缺失的 trainId 数据
+        // TODO: 加锁
+        Set<Long> missingTrainIds = new HashSet<>(trainIds);
+        existingTrainIds.forEach(missingTrainIds::remove);
+        if (!missingTrainIds.isEmpty()) {
+            List<Train> missingTrains = trainMapper.selectByIds(missingTrainIds);
+            missingTrains.forEach(train -> {
+                trainIdMap.put(train.getId(), train);
+                // 将缺失的 train 数据放入 Redis
+                stringRedisTemplate.opsForValue().set(String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, train.getId()), JSON.toJSONString(train));
+            });
+        }
 
         // 内存映射
-        Map<Long, Train> finalTrainIdMap = trainIdMap;
         trainServices.forEach(each -> {
-            each.setTrainNumber(finalTrainIdMap.get(each.getTrainId()).getTrainNumber());
-            each.setSaleStatus(finalTrainIdMap.get(each.getTrainId()).getSaleStatus());
-            each.setSaleTime(finalTrainIdMap.get(each.getTrainId()).getSaleTime());
-            each.setTrainTags(Arrays.stream(finalTrainIdMap.get(each.getTrainId()).getTrainTag().split(",")).toList());
-            each.setTrainBrand(finalTrainIdMap.get(each.getTrainId()).getTrainBrand());
+            Train train = trainIdMap.get(each.getTrainId());
+            each.setTrainNumber(train.getTrainNumber());
+            each.setSaleStatus(train.getSaleStatus());
+            each.setSaleTime(train.getSaleTime());
+            each.setTrainTags(Arrays.stream(train.getTrainTag().split(",")).toList());
+            each.setTrainBrand(train.getTrainBrand());
         });
 
         // 获取 seat_class_list
@@ -174,6 +174,16 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                                 .eq(Seat::getStartStation, each.getStartStation())
                                 .eq(Seat::getEndStation, each.getEndStation())
                 );
+                String lockKey = LOCK_KEY_PREFIX + "seat:" + each.getTrainId() + ":" + each.getStartStation() + ":" + each.getEndStation();
+                boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 10, TimeUnit.SECONDS));
+                if (!lockAcquired) {
+                    throw new ServiceException("系统正忙，请稍后重试");
+                }
+                try {
+                    stringRedisTemplate.opsForValue().set(key, JSON.toJSONString(seats));
+                } finally {
+                    stringRedisTemplate.delete(lockKey);
+                }
             } else {
                 seats = JSON.parseArray(cachedString, Seat.class);
             }
