@@ -21,4 +21,9 @@ public final class RedisConstant {
      * 查询train信息：trainId -> train entity
      */
     public static final String TRAINID_TO_TRAIN_MAPPING = "train-info:%s";
+
+    /**
+     * 查询余票信息：trainId + startStation + endStation -> List<Seat>
+     */
+    public static final String TICKET_STOCKING_MAPPING = "ticket-stocking-mapping:%s_%s_%s";
 }

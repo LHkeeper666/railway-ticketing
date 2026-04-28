@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.cache.CacheProperties;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -45,22 +46,23 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
 
     @Override
     public TicketPageQueryRespDTO queryTicketByPage(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
+        // 参数校验
         ticketPageQueryContext.handler(ChainMarkEnum.TICKET_QUERY.name(), ticketPageQueryReqDTO);
 
         List<TrainServiceDTO> trainServices = null;
         // 获取区域name
-        String startRegionName = stringRedisTemplate.opsForValue().get(
-                String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING,
-                        ticketPageQueryReqDTO.getStartRegionCode()));
-        String endRegionName = stringRedisTemplate.opsForValue().get(
-                String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING,
-                        ticketPageQueryReqDTO.getEndRegionCode())
-        );
+        List<String> buildRegionCodeToNameKeys = new ArrayList<>();
+        buildRegionCodeToNameKeys.add(ticketPageQueryReqDTO.getStartRegionCode());
+        buildRegionCodeToNameKeys.add(ticketPageQueryReqDTO.getEndRegionCode());
+        buildRegionCodeToNameKeys =  buildRegionCodeToNameKeys.stream().map(each -> String.format(
+                RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, each)).toList();
+
+        List<String> regionNames = stringRedisTemplate.opsForValue().multiGet(buildRegionCodeToNameKeys);
+        String startRegionName = regionNames.get(0);
+        String endRegionName = regionNames.get(1);
 
         if (startRegionName == null || endRegionName == null) {
-            List<Station> stations = stationMapper.selectList(
-                    Wrappers.lambdaQuery(Station.class)
-            );
+            List<Station> stations = stationMapper.selectList(Wrappers.lambdaQuery(Station.class));
 
             Map<String, String> regionCodeToNameMap = stations.stream().collect(Collectors.toMap(
                     station -> String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, station.getRegionCode()),
@@ -68,14 +70,9 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                     (existingValue, newValue) -> newValue
             ));
             stringRedisTemplate.opsForValue().multiSet(regionCodeToNameMap);
-
-            startRegionName = stringRedisTemplate.opsForValue().get(
-                    String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING,
-                            ticketPageQueryReqDTO.getStartRegionCode()));
-            endRegionName = stringRedisTemplate.opsForValue().get(
-                    String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING,
-                            ticketPageQueryReqDTO.getEndRegionCode())
-            );
+            regionNames = stringRedisTemplate.opsForValue().multiGet(buildRegionCodeToNameKeys);
+            startRegionName = regionNames.get(0);
+            endRegionName = regionNames.get(1);
         }
 
         // 根据区域name查询车次
@@ -164,31 +161,25 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
         });
 
         // 获取 seat_class_list
-        List<Seat> allSeats = seatMapper.selectList(
-                Wrappers.lambdaQuery(Seat.class)
-                        .in(Seat::getTrainId, trainIds)
-                        .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
-        );
-
-        Map<String, List<Seat>> seatGroupMap =
-                allSeats.stream().collect(Collectors.groupingBy(seat ->
-                        seat.getTrainId() + "_" +
-                        seat.getStartStation() + "_" +
-                        seat.getEndStation()
-                ));
-
         for (TrainServiceDTO each : trainServices) {
+            String key = String.format(RedisConstant.TICKET_STOCKING_MAPPING, each.getTrainId(), each.getStartStation(), each.getEndStation());
 
-            String key = each.getTrainId() + "_" +
-                    each.getStartStation() + "_" +
-                    each.getEndStation();
-
-            List<Seat> seats = seatGroupMap.getOrDefault(key, List.of());
-
+            String cachedString = stringRedisTemplate.opsForValue().get(key);
+            List<Seat> seats = null;
+            if (cachedString == null) {
+                seats = seatMapper.selectList(
+                        Wrappers.lambdaQuery(Seat.class)
+                                .eq(Seat::getTrainId, each.getTrainId())
+                                .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
+                                .eq(Seat::getStartStation, each.getStartStation())
+                                .eq(Seat::getEndStation, each.getEndStation())
+                );
+            } else {
+                seats = JSON.parseArray(cachedString, Seat.class);
+            }
             Map<Integer, List<Seat>> seatTypeToSeatsMap =
                     seats.stream()
                             .collect(Collectors.groupingBy(Seat::getSeatType));
-
             // 组装 seatClassList
             List<SeatClassDTO> seatClassDTOList = seatTypeToSeatsMap.entrySet()
                     .stream().map(entry -> SeatClassDTO.builder()
@@ -197,7 +188,6 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                             .price(entry.getValue().get(0).getPrice())
                             .build()
                     ).toList();
-
             each.setSeatClassList(seatClassDTOList);
         }
 
