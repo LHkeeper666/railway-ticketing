@@ -1,7 +1,9 @@
 package com.lhkeeper.ticketing.railway_ticketing.service.impl;
 
+import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
@@ -10,19 +12,21 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
-import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
+import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.select.SeatSelector;
 import com.lhkeeper.ticketing.railway_ticketing.util.SnowflakeUtil;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 @Service
@@ -39,58 +43,33 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final AbstractChainContext<OrderCreateReqDTO> orderCreateChainContext;
     private final AbstractChainContext<String> orderPayChainContext;
     private final SnowflakeUtil snowflakeUtil;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final TicketServiceImpl ticketServiceImpl;
 
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public OrderCreateRespDTO createOrder(OrderCreateReqDTO reqDTO) {
         orderCreateChainContext.handler(ChainMarkEnum.ORDER_CREATE.name(), reqDTO);
         String orderSn = String.valueOf(snowflakeUtil.generateId());
-        // 创建订单
-        Order order = Order.builder()
-                .orderSn(orderSn)
-                .orderTime(LocalDateTime.now())
-                .startStation(reqDTO.getStartStation())
-                .endStation(reqDTO.getEndStation())
-                .trainId(Long.valueOf(reqDTO.getTrainId()))
-                .userId(null) // TODO
-                .username(null) // TODO
-                .trainNumber(trainMapper.selectOne(
-                        Wrappers.lambdaQuery(Train.class)
-                                .eq(Train::getId, reqDTO.getTrainId())
-                ).getTrainNumber())
-                .departureTime(trainStationMapper.selectOne(
-                        Wrappers.lambdaQuery(TrainStation.class)
-                                .eq(TrainStation::getTrainId, reqDTO.getTrainId())
-                                .eq(TrainStation::getStartStation, reqDTO.getStartStation())
-                ).getDepartureTime())
-                .arrivalTime(trainStationMapper.selectOne(
-                        Wrappers.lambdaQuery(TrainStation.class)
-                                .eq(TrainStation::getTrainId, reqDTO.getTrainId())
-                                .eq(TrainStation::getStartStation, reqDTO.getEndStation())
-                ).getArrivalTime())
-                .status(OrderStatusEnum.UNPAID.getCode())
-                .build();
+
+        Order order = buildOrder(reqDTO, orderSn);
 
         // 选择并锁定座位
-        List<TicketDTO> ticketDTOs = null;
-        try {
-            ticketDTOs = seatSelector.selectSeats(reqDTO);
-        } catch (ServiceException e) {
-            throw new RuntimeException(e);
-        }
+        List<TicketDTO> ticketDTOs = seatSelector.selectSeats(reqDTO);
 
         // 生成 orderitem
         List<OrderItem> orderItems = new ArrayList<>();
         List<OrderItemDTO> orderItemDTOs = new ArrayList<>();
         List<Ticket> tickets = new ArrayList<>();
 
+        Long trainId = Long.parseLong(reqDTO.getTrainId());
         for (TicketDTO ticketDTO : ticketDTOs) {
             orderItems.add(OrderItem.builder()
                     .orderSn(orderSn)
                     .phone(ticketDTO.getPhone())
                     .userId(null) // TODO
                     .username(null) // TODO
-                    .trainId(Long.parseLong(reqDTO.getTrainId()))
+                    .trainId(trainId)
                     .carriageNumber(ticketDTO.getCarriageNumber())
                     .seatType(ticketDTO.getSeatType())
                     .seatNumber(ticketDTO.getSeatNumber())
@@ -98,7 +77,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                     .idType(ticketDTO.getIdType())
                     .idCard(ticketDTO.getIdCard())
                     .ticketType(ticketDTO.getUserType())
-                    .phone(ticketDTO.getPhone())
                     .status(TicketStatusEnum.UNPAID.getCode())
                     .amount(ticketDTO.getAmount())
                     .build()
@@ -117,7 +95,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             tickets.add(Ticket.builder()
                     .orderSn(orderSn)
                     .username(null)
-                    .trainId(Long.parseLong(reqDTO.getTrainId()))
+                    .trainId(trainId)
                     .carriageNumber(ticketDTO.getCarriageNumber())
                     .seatNumber(ticketDTO.getSeatNumber())
                     .passengerId(Long.parseLong(ticketDTO.getPassengerId()))
@@ -128,13 +106,77 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         // insert
         orderMapper.insert(order);
-        ticketMapper.insert(tickets);
+//        ticketMapper.insert(tickets);
+        ticketServiceImpl.saveBatch(tickets);
         orderItemMapper.insert(orderItems);
 
         return OrderCreateRespDTO.builder()
                 .orderSn(order.getOrderSn())
                 .orderItemDTOS(orderItemDTOs)
                 .build();
+    }
+
+    private Order buildOrder(OrderCreateReqDTO reqDTO, String orderSn) {
+        Long trainId = Long.valueOf(reqDTO.getTrainId());
+        String startStation = reqDTO.getStartStation();
+        String endStation = reqDTO.getEndStation();
+
+        Train train = getTrainInfo(trainId);
+
+        String depKey = String.format(RedisConstant.TRAIN_STATION_MAPPING, trainId, startStation);
+        String arrKey = String.format(RedisConstant.TRAIN_STATION_MAPPING, trainId, endStation);
+        List<String> tsCache = stringRedisTemplate.opsForValue().multiGet(Arrays.asList(depKey, arrKey));
+        TrainStation depTS = null, arrTS = null;
+
+        if (tsCache.get(0) != null && tsCache.get(1) != null) {
+            depTS = JSON.parseObject(tsCache.get(0), TrainStation.class);
+            arrTS = JSON.parseObject(tsCache.get(1), TrainStation.class);
+        } else {
+            List<TrainStation> stations = trainStationMapper.selectList(
+                    Wrappers.lambdaQuery(TrainStation.class)
+                            .eq(TrainStation::getTrainId, trainId)
+                            .in(TrainStation::getStartStation, startStation, endStation)
+            );
+            for (TrainStation ts : stations) {
+                if (startStation.equals(ts.getStartStation())) depTS = ts;
+                if (endStation.equals(ts.getStartStation())) arrTS = ts;
+                stringRedisTemplate.opsForValue().set(
+                        String.format(RedisConstant.TRAIN_STATION_MAPPING, trainId, ts.getStartStation()),
+                        JSON.toJSONString(ts)
+                );
+            }
+            if (depTS == null || arrTS == null) {
+                throw new ClientException("车次区间信息不存在");
+            }
+        }
+
+        return Order.builder()
+                .orderSn(orderSn)
+                .orderTime(LocalDateTime.now())
+                .trainId(trainId)
+                .userId(null)
+                .username(null)
+                .startStation(startStation)
+                .endStation(endStation)
+                .trainNumber(train.getTrainNumber())
+                .departureTime(depTS.getDepartureTime())
+                .arrivalTime(arrTS.getArrivalTime())
+                .status(OrderStatusEnum.UNPAID.getCode())
+                .build();
+    }
+
+    private Train getTrainInfo(Long trainId) {
+        String trainKey = String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, trainId);
+        String trainJSON = stringRedisTemplate.opsForValue().get(trainKey);
+        if (trainJSON != null) {
+            return JSON.parseObject(trainJSON, Train.class);
+        }
+        Train train = trainMapper.selectById(trainId);
+        if (train == null) {
+            throw new ClientException("车次不存在");
+        }
+        stringRedisTemplate.opsForValue().set(trainKey, JSON.toJSONString(train));
+        return train;
     }
 
     @Override

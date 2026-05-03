@@ -1,5 +1,6 @@
 package com.lhkeeper.ticketing.railway_ticketing.service.handler.select;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderCreatePassengerDetailDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
@@ -11,11 +12,13 @@ import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -25,6 +28,9 @@ public class SeatSelector {
 
     private final PassengerMapper passengerMapper;
     private final SeatMapper seatMapper;
+    private final StringRedisTemplate stringRedisTemplate;
+
+    private static final String LOCK_KEY_PREFIX = "lock:seat:";
 
     public List<TicketDTO> selectSeats(OrderCreateReqDTO orderCreateReqDTO) throws ServiceException {
         List<String> passengerIds = orderCreateReqDTO.getPassengers().stream()
@@ -55,30 +61,58 @@ public class SeatSelector {
             );
         });
 
-        List<Seat> updateSeats = new ArrayList<>();
+        // 按座位类型分组
+        Map<Integer, List<TicketDTO>> groupedBySeatType = ticketDTOList.stream()
+                .collect(Collectors.groupingBy(TicketDTO::getSeatType));
 
-        // 选择座位
-        for (TicketDTO ticketDTO : ticketDTOList) {
-            Seat chosenSeat = seatMapper.selectList(
-                    Wrappers.lambdaQuery(Seat.class)
-                            .eq(Seat::getSeatType, ticketDTO.getSeatType())
-                            .eq(Seat::getTrainId, orderCreateReqDTO.getTrainId())
-                            .eq(Seat::getStartStation, orderCreateReqDTO.getStartStation())
-                            .eq(Seat::getEndStation, orderCreateReqDTO.getEndStation())
-                            .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
-            ).get(0);
-            if (chosenSeat == null)
-                throw new ServiceException("余票不足");
+        for (Map.Entry<Integer, List<TicketDTO>> entry : groupedBySeatType.entrySet()) {
+            Integer seatType = entry.getKey();
+            List<TicketDTO> sameTypeTickets = entry.getValue();
+            int needCount = sameTypeTickets.size();
 
-            chosenSeat.setSeatStatus(SeatStatusEnum.LOCKED.getCode());
-            ticketDTO.setSeatNumber(chosenSeat.getSeatNumber());
-            ticketDTO.setAmount(chosenSeat.getPrice());
-            ticketDTO.setCarriageNumber(chosenSeat.getCarriageNumber());
+            String lockKey = LOCK_KEY_PREFIX + orderCreateReqDTO.getTrainId() + ":"
+                    + orderCreateReqDTO.getStartStation() + ":" + orderCreateReqDTO.getEndStation()
+                    + ":" + seatType;
+            boolean acquired = Boolean.TRUE.equals(
+                    stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 10, TimeUnit.SECONDS)
+            );
+            if (!acquired) {
+                throw new ServiceException("系统正忙，请稍后重试");
+            }
+            try {
+                List<Seat> availableSeats = seatMapper.selectList(
+                        Wrappers.lambdaQuery(Seat.class)
+                                .eq(Seat::getSeatType, seatType)
+                                .eq(Seat::getTrainId, orderCreateReqDTO.getTrainId())
+                                .eq(Seat::getStartStation, orderCreateReqDTO.getStartStation())
+                                .eq(Seat::getEndStation, orderCreateReqDTO.getEndStation())
+                                .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
+                );
+                if (availableSeats.size() < needCount) {
+                    throw new ServiceException("余票不足");
+                }
 
-            updateSeats.add(chosenSeat);
+                for (int i = 0; i < needCount; i++) {
+                    Seat chosenSeat = availableSeats.get(i);
+                    TicketDTO ticketDTO = sameTypeTickets.get(i);
+
+                    chosenSeat.setSeatStatus(SeatStatusEnum.LOCKED.getCode());
+                    ticketDTO.setSeatNumber(chosenSeat.getSeatNumber());
+                    ticketDTO.setAmount(chosenSeat.getPrice());
+                    ticketDTO.setCarriageNumber(chosenSeat.getCarriageNumber());
+
+                    LambdaUpdateWrapper<Seat> wrapper = new LambdaUpdateWrapper<>();
+                    wrapper.eq(Seat::getId, chosenSeat.getId())
+                            .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode());
+                    boolean updated = seatMapper.update(chosenSeat, wrapper) > 0;
+                    if (!updated) {
+                        throw new ServiceException("座位已被抢占");
+                    }
+                }
+            } finally {
+                stringRedisTemplate.delete(lockKey);
+            }
         }
-
-        seatMapper.updateById(updateSeats);
 
         return ticketDTOList;
     }

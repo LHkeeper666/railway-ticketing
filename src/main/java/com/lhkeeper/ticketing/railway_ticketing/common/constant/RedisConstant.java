@@ -26,4 +26,9 @@ public final class RedisConstant {
      * 查询余票信息：trainId + startStation + endStation -> List<Seat>
      */
     public static final String TICKET_STOCKING_MAPPING = "ticket-stocking-mapping:%s_%s_%s";
+
+    /**
+     * 列车区间信息：trainId + startStation -> TrainStation
+     */
+    public static final String TRAIN_STATION_MAPPING = "train-station:%s_%s";
 }
