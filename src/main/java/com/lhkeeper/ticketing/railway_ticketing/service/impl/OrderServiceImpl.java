@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
+import com.lhkeeper.ticketing.railway_ticketing.context.UserContext;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
@@ -71,8 +72,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             orderItems.add(OrderItem.builder()
                     .orderSn(orderSn)
                     .phone(ticketDTO.getPhone())
-                    .userId(null) // TODO
-                    .username(null) // TODO
+                    .userId(UserContext.get().getUserId())
+                    .username(UserContext.get().getUsername())
                     .trainId(trainId)
                     .carriageNumber(ticketDTO.getCarriageNumber())
                     .seatType(ticketDTO.getSeatType())
@@ -98,7 +99,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             );
             tickets.add(Ticket.builder()
                     .orderSn(orderSn)
-                    .username(null)
+                    .username(UserContext.get().getUsername())
                     .trainId(trainId)
                     .carriageNumber(ticketDTO.getCarriageNumber())
                     .seatNumber(ticketDTO.getSeatNumber())
@@ -159,8 +160,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .orderSn(orderSn)
                 .orderTime(LocalDateTime.now())
                 .trainId(trainId)
-                .userId(null)
-                .username(null)
+                .userId(UserContext.get().getUserId())
+                .username(UserContext.get().getUsername())
                 .startStation(startStation)
                 .endStation(endStation)
                 .trainNumber(train.getTrainNumber())

@@ -26,6 +26,10 @@ spring:
 #    com.baomidou.mybatisplus: INFO
 #    org.mybatis: DEBUG
 
+jwt:
+  secret: ${JWT_SECRET:railway-ticketing-secret-key-2026}
+  expiration: ${JWT_EXPIRATION:86400}
+
 #mybatis-plus:
 #  configuration:
 #    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

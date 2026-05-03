@@ -15,5 +15,15 @@ public enum ChainMarkEnum {
     /**
      * 订单支付过滤器
      */
-    ORDER_PAY;
+    ORDER_PAY,
+
+    /**
+     * 登录过滤器
+     */
+    AUTH_LOGIN,
+
+    /**
+     * 注册过滤器
+     */
+    AUTH_REGISTER;
 }
