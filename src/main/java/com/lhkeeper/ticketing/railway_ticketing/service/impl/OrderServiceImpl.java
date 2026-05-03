@@ -13,6 +13,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
+import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
@@ -28,6 +29,8 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
@@ -45,6 +48,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final SnowflakeUtil snowflakeUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final TicketServiceImpl ticketServiceImpl;
+    private final OrderItemServiceImpl orderItemServiceImpl;
 
     @Transactional(rollbackFor = Throwable.class)
     @Override
@@ -106,9 +110,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         // insert
         orderMapper.insert(order);
-//        ticketMapper.insert(tickets);
         ticketServiceImpl.saveBatch(tickets);
-        orderItemMapper.insert(orderItems);
+        orderItemServiceImpl.saveBatch(orderItems);
 
         return OrderCreateRespDTO.builder()
                 .orderSn(order.getOrderSn())
@@ -128,7 +131,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         List<String> tsCache = stringRedisTemplate.opsForValue().multiGet(Arrays.asList(depKey, arrKey));
         TrainStation depTS = null, arrTS = null;
 
-        if (tsCache.get(0) != null && tsCache.get(1) != null) {
+        if (tsCache != null && tsCache.get(0) != null && tsCache.get(1) != null) {
             depTS = JSON.parseObject(tsCache.get(0), TrainStation.class);
             arrTS = JSON.parseObject(tsCache.get(1), TrainStation.class);
         } else {
@@ -142,7 +145,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 if (endStation.equals(ts.getStartStation())) arrTS = ts;
                 stringRedisTemplate.opsForValue().set(
                         String.format(RedisConstant.TRAIN_STATION_MAPPING, trainId, ts.getStartStation()),
-                        JSON.toJSONString(ts)
+                        JSON.toJSONString(ts),
+                        RedisConstant.CACHE_TTL_TRAIN_STATION + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_TRAIN_STATION / 10),
+                        TimeUnit.SECONDS
                 );
             }
             if (depTS == null || arrTS == null) {
@@ -169,59 +174,86 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         String trainKey = String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, trainId);
         String trainJSON = stringRedisTemplate.opsForValue().get(trainKey);
         if (trainJSON != null) {
+            if (RedisConstant.NULL_PLACEHOLDER.equals(trainJSON)) {
+                throw new ClientException("车次不存在");
+            }
             return JSON.parseObject(trainJSON, Train.class);
         }
-        Train train = trainMapper.selectById(trainId);
-        if (train == null) {
-            throw new ClientException("车次不存在");
+        String lockKey = RedisConstant.LOCK_KEY_PREFIX + "train:" + trainId;
+        boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
+                .setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
+        if (!lockAcquired) {
+            throw new ServiceException("系统正忙，请稍后重试");
         }
-        stringRedisTemplate.opsForValue().set(trainKey, JSON.toJSONString(train));
-        return train;
+        try {
+            trainJSON = stringRedisTemplate.opsForValue().get(trainKey);
+            if (trainJSON != null) {
+                if (RedisConstant.NULL_PLACEHOLDER.equals(trainJSON)) {
+                    throw new ClientException("车次不存在");
+                }
+                return JSON.parseObject(trainJSON, Train.class);
+            }
+            Train train = trainMapper.selectById(trainId);
+            if (train == null) {
+                stringRedisTemplate.opsForValue().set(trainKey, RedisConstant.NULL_PLACEHOLDER,
+                        RedisConstant.CACHE_TTL_NULL, TimeUnit.SECONDS);
+                throw new ClientException("车次不存在");
+            }
+            stringRedisTemplate.opsForValue().set(trainKey, JSON.toJSONString(train),
+                    RedisConstant.CACHE_TTL_TRAIN_INFO + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_TRAIN_INFO / 10),
+                    TimeUnit.SECONDS);
+            return train;
+        } finally {
+            stringRedisTemplate.delete(lockKey);
+        }
     }
 
+    @Transactional(rollbackFor = Throwable.class)
     @Override
     public void payOrder(String orderSn) {
         // 参数校验
         orderPayChainContext.handler(ChainMarkEnum.ORDER_PAY.name(), orderSn);
 
-        // 更新状态
+        // 更新订单状态
         Order order = orderMapper.selectOne(
                 Wrappers.lambdaQuery(Order.class)
                         .eq(Order::getOrderSn, orderSn)
         );
         order.setStatus(OrderStatusEnum.PAID.getCode());
+        order.setPayTime(LocalDateTime.now());
+        orderMapper.updateById(order);
 
-
+        // 计算总金额
         List<OrderItem> orderItems = orderItemMapper.selectList(
                 Wrappers.lambdaQuery(OrderItem.class)
                         .eq(OrderItem::getOrderSn, orderSn)
         );
         BigDecimal totalAmount = BigDecimal.ZERO;
-        orderItems.forEach(orderItem -> {
-            orderItem.setStatus(OrderStatusEnum.PAID.getCode());
-            totalAmount.add(orderItem.getAmount());
-        });
+        for (OrderItem orderItem : orderItems) {
+            totalAmount = totalAmount.add(orderItem.getAmount());
+        }
 
-        List<Ticket> tickets = ticketMapper.selectList(
-                Wrappers.lambdaQuery(Ticket.class)
-                        .eq(Ticket::getOrderSn, orderSn)
+        // 批量更新 orderItem 状态
+        orderItemMapper.update(null,
+                Wrappers.lambdaUpdate(OrderItem.class)
+                        .eq(OrderItem::getOrderSn, orderSn)
+                        .set(OrderItem::getStatus, TicketStatusEnum.PAID.getCode())
         );
-        tickets.forEach(ticket -> {
-            ticket.setTicketStatus(TicketStatusEnum.PAID.getCode());
-        });
+
+        // 批量更新 ticket 状态
+        ticketMapper.update(null,
+                Wrappers.lambdaUpdate(Ticket.class)
+                        .eq(Ticket::getOrderSn, orderSn)
+                        .set(Ticket::getTicketStatus, TicketStatusEnum.PAID.getCode())
+        );
 
         // 创建pay实体
-        // TODO: pay 实体涉及比较多目前没用上的字段
         Pay pay = Pay.builder()
                 .paySn(null) // TODO
                 .orderSn(orderSn)
                 .outOrderSn(null) // TODO
                 .totalAmount(totalAmount)
                 .build();
-
-        orderMapper.updateById(order);
-        orderItemMapper.updateById(orderItems);
-        ticketMapper.updateById(tickets);
         payMapper.insert(pay);
     }
 }

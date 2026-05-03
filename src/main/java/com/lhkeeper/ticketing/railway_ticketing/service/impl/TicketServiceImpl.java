@@ -17,6 +17,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -43,8 +44,6 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
     private final TrainStationRelationMapper trainStationRelationMapper;
     private final AbstractChainContext<TicketPageQueryReqDTO> ticketPageQueryContext;
     private final StringRedisTemplate stringRedisTemplate;
-
-    private static final String LOCK_KEY_PREFIX = "lock:ticket:";
 
     @Override
     public TicketPageQueryRespDTO queryTicketByPage(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
@@ -87,13 +86,14 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                     trainStationRelation -> String.format(RedisConstant.TRAINID_TO_STATION_RELATION_MAPPING, trainStationRelation.getTrainId()),
                     JSON::toJSONString
             ));
-            String lockKey = LOCK_KEY_PREFIX + "station_relation";
-            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 10, TimeUnit.SECONDS));
+            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "station_relation";
+            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
             if (!lockAcquired) {
                 throw new ServiceException("系统正忙，请稍后重试");
             }
             try {
                 stringRedisTemplate.opsForHash().putAll(buildTrainStationRelationHashKey, trainStationRelationMap);
+                stringRedisTemplate.expire(buildTrainStationRelationHashKey, RedisConstant.CACHE_TTL_STATION_RELATION, TimeUnit.SECONDS);
             } finally {
                 stringRedisTemplate.delete(lockKey);
             }
@@ -128,26 +128,53 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
         Map<Long, Train> trainIdMap = new HashMap<>();
 
         // 过滤出已存在的 Redis 数据
-        List<Long> existingTrainIds = new ArrayList<>();
+        List<Long> cachedTrainIds = new ArrayList<>();
+        List<Long> trainIdList = new ArrayList<>(trainIds);
         for (int i = 0; i < trainJSONStrings.size(); i++) {
-            if (trainJSONStrings.get(i) != null) {
-                Train train = JSON.parseObject(trainJSONStrings.get(i), Train.class);
-                trainIdMap.put(train.getId(), train);
-                existingTrainIds.add(train.getId());
+            String json = trainJSONStrings.get(i);
+            if (json != null) {
+                Long trainId = trainIdList.get(i);
+                cachedTrainIds.add(trainId);
+                if (!RedisConstant.NULL_PLACEHOLDER.equals(json)) {
+                    Train train = JSON.parseObject(json, Train.class);
+                    trainIdMap.put(train.getId(), train);
+                }
             }
         }
 
         // 只查询缺失的 trainId 数据
-        // TODO: 加锁
         Set<Long> missingTrainIds = new HashSet<>(trainIds);
-        existingTrainIds.forEach(missingTrainIds::remove);
+        cachedTrainIds.forEach(missingTrainIds::remove);
         if (!missingTrainIds.isEmpty()) {
-            List<Train> missingTrains = trainMapper.selectByIds(missingTrainIds);
-            missingTrains.forEach(train -> {
-                trainIdMap.put(train.getId(), train);
-                // 将缺失的 train 数据放入 Redis
-                stringRedisTemplate.opsForValue().set(String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, train.getId()), JSON.toJSONString(train));
-            });
+            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "train_batch";
+            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
+                    .setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
+            if (!lockAcquired) {
+                throw new ServiceException("系统正忙，请稍后重试");
+            }
+            try {
+                List<Train> missingTrains = trainMapper.selectByIds(missingTrainIds);
+                Set<Long> foundTrainIds = new HashSet<>();
+                missingTrains.forEach(train -> {
+                    trainIdMap.put(train.getId(), train);
+                    foundTrainIds.add(train.getId());
+                    stringRedisTemplate.opsForValue().set(
+                            String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, train.getId()),
+                            JSON.toJSONString(train),
+                            RedisConstant.CACHE_TTL_TRAIN_INFO + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_TRAIN_INFO / 10),
+                            TimeUnit.SECONDS);
+                });
+                // 缓存空值防止穿透
+                missingTrainIds.stream()
+                        .filter(id -> !foundTrainIds.contains(id))
+                        .forEach(id -> stringRedisTemplate.opsForValue().set(
+                                String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, id),
+                                RedisConstant.NULL_PLACEHOLDER,
+                                RedisConstant.CACHE_TTL_NULL,
+                                TimeUnit.SECONDS));
+            } finally {
+                stringRedisTemplate.delete(lockKey);
+            }
         }
 
         // 内存映射
@@ -174,13 +201,15 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                                 .eq(Seat::getStartStation, each.getStartStation())
                                 .eq(Seat::getEndStation, each.getEndStation())
                 );
-                String lockKey = LOCK_KEY_PREFIX + "seat:" + each.getTrainId() + ":" + each.getStartStation() + ":" + each.getEndStation();
-                boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 10, TimeUnit.SECONDS));
+                String lockKey = RedisConstant.LOCK_KEY_PREFIX + "seat:" + each.getTrainId() + ":" + each.getStartStation() + ":" + each.getEndStation();
+                boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
                 if (!lockAcquired) {
                     throw new ServiceException("系统正忙，请稍后重试");
                 }
                 try {
-                    stringRedisTemplate.opsForValue().set(key, JSON.toJSONString(seats));
+                    stringRedisTemplate.opsForValue().set(key, JSON.toJSONString(seats),
+                            RedisConstant.CACHE_TTL_SEAT_STOCK + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_SEAT_STOCK / 10),
+                            TimeUnit.SECONDS);
                 } finally {
                     stringRedisTemplate.delete(lockKey);
                 }

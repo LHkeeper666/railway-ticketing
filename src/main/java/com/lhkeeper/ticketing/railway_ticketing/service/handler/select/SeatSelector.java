@@ -2,6 +2,7 @@ package com.lhkeeper.ticketing.railway_ticketing.service.handler.select;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderCreatePassengerDetailDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
@@ -29,8 +30,6 @@ public class SeatSelector {
     private final PassengerMapper passengerMapper;
     private final SeatMapper seatMapper;
     private final StringRedisTemplate stringRedisTemplate;
-
-    private static final String LOCK_KEY_PREFIX = "lock:seat:";
 
     public List<TicketDTO> selectSeats(OrderCreateReqDTO orderCreateReqDTO) throws ServiceException {
         List<String> passengerIds = orderCreateReqDTO.getPassengers().stream()
@@ -70,11 +69,11 @@ public class SeatSelector {
             List<TicketDTO> sameTypeTickets = entry.getValue();
             int needCount = sameTypeTickets.size();
 
-            String lockKey = LOCK_KEY_PREFIX + orderCreateReqDTO.getTrainId() + ":"
+            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "seat:" + orderCreateReqDTO.getTrainId() + ":"
                     + orderCreateReqDTO.getStartStation() + ":" + orderCreateReqDTO.getEndStation()
                     + ":" + seatType;
             boolean acquired = Boolean.TRUE.equals(
-                    stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 10, TimeUnit.SECONDS)
+                    stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS)
             );
             if (!acquired) {
                 throw new ServiceException("系统正忙，请稍后重试");
@@ -113,6 +112,11 @@ public class SeatSelector {
                 stringRedisTemplate.delete(lockKey);
             }
         }
+
+        // 座位锁定后使余票缓存失效
+        String stockCacheKey = String.format(RedisConstant.TICKET_STOCKING_MAPPING,
+                orderCreateReqDTO.getTrainId(), orderCreateReqDTO.getStartStation(), orderCreateReqDTO.getEndStation());
+        stringRedisTemplate.delete(stockCacheKey);
 
         return ticketDTOList;
     }

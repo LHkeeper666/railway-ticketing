@@ -13,10 +13,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 @Component
 @RequiredArgsConstructor
@@ -25,28 +24,27 @@ public class TicketQueryParamVerifyChainHandler implements TicketQueryChainFilte
     private final RegionMapper regionMapper;
     private final StringRedisTemplate stringRedisTemplate;
 
-    /**
-     * 缓存数据为空并且已经加载过标识
-     */
-    private static boolean CACHE_DATA_ISNULL_AND_LOAD_FLAG = false;
-
     @Override
     public void handler(TicketPageQueryReqDTO requestParam) {
 
-        if (!CACHE_DATA_ISNULL_AND_LOAD_FLAG) {
-            String lockKey = "lock:region";
-            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 10, TimeUnit.SECONDS));
+        if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
+            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "region";
+            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
+                    .setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
             if (!lockAcquired) {
                 throw new ServiceException("系统正忙，请稍后重试");
             }
-            if (!CACHE_DATA_ISNULL_AND_LOAD_FLAG) {
+            // 双重检查
+            if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
                 try {
                     List<Region> regions = regionMapper.selectList(Wrappers.emptyWrapper());
-                    Map<String, String> codeToNameMap = regions.stream().collect(Collectors.toMap(
-                            region -> String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, region.getCode()),
-                            Region::getName));
-                    stringRedisTemplate.opsForValue().multiSet(codeToNameMap);
-                    CACHE_DATA_ISNULL_AND_LOAD_FLAG = true;
+                    for (Region region : regions) {
+                        String key = String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, region.getCode());
+                        stringRedisTemplate.opsForValue().set(key, region.getName(),
+                                RedisConstant.CACHE_TTL_REGION + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_REGION / 10),
+                                TimeUnit.SECONDS);
+                    }
+                    stringRedisTemplate.opsForValue().set(RedisConstant.REGION_LOADED_FLAG, "1");
                 } finally {
                     stringRedisTemplate.delete(lockKey);
                 }

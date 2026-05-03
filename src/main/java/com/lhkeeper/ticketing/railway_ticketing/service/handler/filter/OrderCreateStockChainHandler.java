@@ -8,6 +8,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Seat;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
+import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -15,6 +16,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Component
@@ -42,14 +45,32 @@ public class OrderCreateStockChainHandler implements OrderCreateChainFilter<Orde
         if (cachedJSON != null) {
             availableSeats = JSON.parseArray(cachedJSON, Seat.class);
         } else {
-            availableSeats = seatMapper.selectList(
-                    Wrappers.lambdaQuery(Seat.class)
-                            .eq(Seat::getTrainId, trainId)
-                            .eq(Seat::getStartStation, startStation)
-                            .eq(Seat::getEndStation, endStation)
-                            .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
-            );
-            stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(availableSeats));
+            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "stock:" + trainId + ":" + startStation + ":" + endStation;
+            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
+                    .setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
+            if (!lockAcquired) {
+                throw new ServiceException("系统正忙，请稍后重试");
+            }
+            try {
+                // 双重检查
+                cachedJSON = stringRedisTemplate.opsForValue().get(cacheKey);
+                if (cachedJSON != null) {
+                    availableSeats = JSON.parseArray(cachedJSON, Seat.class);
+                } else {
+                    availableSeats = seatMapper.selectList(
+                            Wrappers.lambdaQuery(Seat.class)
+                                    .eq(Seat::getTrainId, trainId)
+                                    .eq(Seat::getStartStation, startStation)
+                                    .eq(Seat::getEndStation, endStation)
+                                    .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
+                    );
+                    stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(availableSeats),
+                            RedisConstant.CACHE_TTL_SEAT_STOCK + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_SEAT_STOCK / 10),
+                            TimeUnit.SECONDS);
+                }
+            } finally {
+                stringRedisTemplate.delete(lockKey);
+            }
         }
 
         Map<Integer, Long> availableByType = availableSeats.stream()
