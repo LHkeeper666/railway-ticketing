@@ -3,9 +3,10 @@ package com.lhkeeper.ticketing.railway_ticketing.service.handler.filter;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.TicketPageQueryReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.util.StringUtil;
+import org.springframework.stereotype.Component;
 
+@Component
 public class TicketQueryParamNotNullChainHandler implements TicketQueryChainFilter<TicketPageQueryReqDTO> {
-
 
     @Override
     public void handler(TicketPageQueryReqDTO requestParam) {

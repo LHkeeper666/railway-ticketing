@@ -3,15 +3,20 @@ package com.lhkeeper.ticketing.railway_ticketing.service.handler.select;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderCreatePassengerDetailDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.RouteDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Passenger;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Seat;
+import com.lhkeeper.ticketing.railway_ticketing.domain.entity.TrainStation;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
+import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
+import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -29,6 +34,7 @@ public class SeatSelector {
 
     private final PassengerMapper passengerMapper;
     private final SeatMapper seatMapper;
+    private final TrainStationMapper trainStationMapper;
     private final StringRedisTemplate stringRedisTemplate;
 
     public List<TicketDTO> selectSeats(OrderCreateReqDTO orderCreateReqDTO) throws ServiceException {
@@ -91,21 +97,37 @@ public class SeatSelector {
                     throw new ServiceException("余票不足");
                 }
 
+                // 计算全部重叠区间
+                Long trainId = Long.parseLong(orderCreateReqDTO.getTrainId());
+                List<TrainStation> trainStations = trainStationMapper.selectList(
+                        Wrappers.lambdaQuery(TrainStation.class)
+                                .eq(TrainStation::getTrainId, trainId)
+                );
+                List<RouteDTO> takeoutRoutes = StationCalculateUtil.takeoutStation(
+                        trainStations, orderCreateReqDTO.getStartStation(), orderCreateReqDTO.getEndStation());
+
                 for (int i = 0; i < needCount; i++) {
                     Seat chosenSeat = availableSeats.get(i);
                     TicketDTO ticketDTO = sameTypeTickets.get(i);
 
-                    chosenSeat.setSeatStatus(SeatStatusEnum.LOCKED.getCode());
                     ticketDTO.setSeatNumber(chosenSeat.getSeatNumber());
                     ticketDTO.setAmount(chosenSeat.getPrice());
                     ticketDTO.setCarriageNumber(chosenSeat.getCarriageNumber());
 
-                    LambdaUpdateWrapper<Seat> wrapper = new LambdaUpdateWrapper<>();
-                    wrapper.eq(Seat::getId, chosenSeat.getId())
-                            .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode());
-                    boolean updated = seatMapper.update(chosenSeat, wrapper) > 0;
-                    if (!updated) {
-                        throw new ServiceException("座位已被抢占");
+                    // 锁定全部重叠区间
+                    for (RouteDTO route : takeoutRoutes) {
+                        LambdaUpdateWrapper<Seat> wrapper = new LambdaUpdateWrapper<Seat>()
+                                .eq(Seat::getTrainId, trainId)
+                                .eq(Seat::getCarriageNumber, chosenSeat.getCarriageNumber())
+                                .eq(Seat::getSeatNumber, chosenSeat.getSeatNumber())
+                                .eq(Seat::getStartStation, route.getStartStation())
+                                .eq(Seat::getEndStation, route.getEndStation())
+                                .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
+                                .set(Seat::getSeatStatus, SeatStatusEnum.LOCKED.getCode());
+                        int updated = seatMapper.update(null, wrapper);
+                        if (updated == 0) {
+                            throw new ServiceException("座位已被抢占");
+                        }
                     }
                 }
             } finally {
@@ -113,10 +135,19 @@ public class SeatSelector {
             }
         }
 
-        // 座位锁定后使余票缓存失效
-        String stockCacheKey = String.format(RedisConstant.TICKET_STOCKING_MAPPING,
-                orderCreateReqDTO.getTrainId(), orderCreateReqDTO.getStartStation(), orderCreateReqDTO.getEndStation());
-        stringRedisTemplate.delete(stockCacheKey);
+        // 失效全部重叠区间的余票缓存
+        Long trainId = Long.parseLong(orderCreateReqDTO.getTrainId());
+        List<TrainStation> allStations = trainStationMapper.selectList(
+                Wrappers.lambdaQuery(TrainStation.class)
+                        .eq(TrainStation::getTrainId, trainId)
+        );
+        List<RouteDTO> cacheInvalidateRoutes = StationCalculateUtil.takeoutStation(
+                allStations, orderCreateReqDTO.getStartStation(), orderCreateReqDTO.getEndStation());
+        for (RouteDTO route : cacheInvalidateRoutes) {
+            String stockCacheKey = String.format(RedisConstant.TICKET_STOCKING_MAPPING,
+                    orderCreateReqDTO.getTrainId(), route.getStartStation(), route.getEndStation());
+            stringRedisTemplate.delete(stockCacheKey);
+        }
 
         return ticketDTOList;
     }

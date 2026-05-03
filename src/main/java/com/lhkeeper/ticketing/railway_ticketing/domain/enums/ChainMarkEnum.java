@@ -25,5 +25,15 @@ public enum ChainMarkEnum {
     /**
      * 注册过滤器
      */
-    AUTH_REGISTER;
+    AUTH_REGISTER,
+
+    /**
+     * 支付结果回调过滤器
+     */
+    PAY_NOTIFY,
+
+    /**
+     * 取消订单过滤器
+     */
+    ORDER_CANCEL;
 }
