@@ -14,7 +14,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 @Component
@@ -40,9 +39,7 @@ public class TicketQueryParamVerifyChainHandler implements TicketQueryChainFilte
                     List<Region> regions = regionMapper.selectList(Wrappers.emptyWrapper());
                     for (Region region : regions) {
                         String key = String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, region.getCode());
-                        stringRedisTemplate.opsForValue().set(key, region.getName(),
-                                RedisConstant.CACHE_TTL_REGION + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_REGION / 10),
-                                TimeUnit.SECONDS);
+                        stringRedisTemplate.opsForValue().set(key, region.getName());
                     }
                     stringRedisTemplate.opsForValue().set(RedisConstant.REGION_LOADED_FLAG, "1");
                 } finally {

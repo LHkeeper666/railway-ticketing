@@ -1,5 +1,6 @@
 package com.lhkeeper.ticketing.railway_ticketing.controller;
 
+import com.lhkeeper.ticketing.railway_ticketing.common.annotation.RateLimit;
 import com.lhkeeper.ticketing.railway_ticketing.common.result.Result;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,6 +35,7 @@ public class TicketController {
         return "OK";
     }
 
+    @RateLimit(key = "ticket:query", capacity = 100, refillRate = 50.0)
     @GetMapping("/query")
     public Result<TicketPageQueryRespDTO> ticketQuery(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
         return Result.success(ticketService.queryTicketByPage(ticketPageQueryReqDTO));

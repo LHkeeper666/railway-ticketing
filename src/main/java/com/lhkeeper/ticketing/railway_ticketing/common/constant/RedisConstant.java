@@ -34,8 +34,8 @@ public final class RedisConstant {
      * ======================== 缓存 TTL（秒） ========================
      */
 
-    /** 区域映射 1h */
-    public static final long CACHE_TTL_REGION = 3600L;
+    /** 区域映射 1d */
+    public static final long CACHE_TTL_REGION = 3600L * 24;
     /** 车次信息 30min */
     public static final long CACHE_TTL_TRAIN_INFO = 1800L;
     /** 车次关系 10min */
@@ -55,4 +55,11 @@ public final class RedisConstant {
     public static final String LOCK_KEY_PREFIX = "lock:";
     /** 锁超时时间（秒） */
     public static final long LOCK_TTL_SECONDS = 10L;
+
+    /*
+     * ======================== 限流 ========================
+     */
+
+    /** 令牌桶 key 前缀 */
+    public static final String RATE_LIMIT_KEY_PREFIX = "rate_limit:";
 }

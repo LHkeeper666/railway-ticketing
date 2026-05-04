@@ -22,9 +22,6 @@ public class DateUtil {
     }
 
     public static boolean beforeToday(Date date) {
-        if (date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate().isBefore(LocalDate.now())) {
-            return false;
-        }
-        return true;
+        return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate().isBefore(LocalDate.now());
     }
 }

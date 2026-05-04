@@ -1,15 +1,19 @@
 package com.lhkeeper.ticketing.railway_ticketing.controller;
 
+import com.lhkeeper.ticketing.railway_ticketing.common.annotation.RateLimit;
 import com.lhkeeper.ticketing.railway_ticketing.common.result.Result;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.PayCallbackReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+@Slf4j
 @RestController
 @RequestMapping("/order")
 public class OrderController {
@@ -17,13 +21,23 @@ public class OrderController {
     @Autowired
     private OrderService orderService;
 
+    @RateLimit(key = "order:create", capacity = 20, refillRate = 10.0)
     @PostMapping("/create")
     public Result<OrderCreateRespDTO> createOrder(@RequestBody OrderCreateReqDTO reqDTO) {
+        log.info("收到创建订单请求, trainId={}, passengers={}", reqDTO.getTrainId(), reqDTO.getPassengers().size());
         return Result.success(orderService.createOrder(reqDTO));
+    }
+
+    @RateLimit(key = "order:flash-create", capacity = 50, refillRate = 30.0)
+    @PostMapping("/flash-create")
+    public Result<FlashOrderCreateRespDTO> flashCreate(@RequestBody OrderCreateReqDTO reqDTO) {
+        log.info("收到抢票请求, trainId={}, passengers={}", reqDTO.getTrainId(), reqDTO.getPassengers().size());
+        return Result.success(orderService.flashCreateOrder(reqDTO));
     }
 
     @PostMapping("/{orderSn}/pay")
     public Result<?> payOrder(@PathVariable("orderSn") String orderSn) {
+        log.info("收到支付请求, orderSn={}", orderSn);
         try {
             orderService.payOrder(orderSn);
             return Result.success();
@@ -34,6 +48,7 @@ public class OrderController {
 
     @PostMapping("/pay/notify")
     public Result<?> payNotify(@RequestBody PayCallbackReqDTO reqDTO) {
+        log.info("收到支付回调请求, orderSn={}, status={}", reqDTO.getOrderSn(), reqDTO.getStatus());
         try {
             orderService.handlePayNotify(reqDTO);
             return Result.success();
@@ -49,6 +64,7 @@ public class OrderController {
 
     @PostMapping("/{orderSn}/cancel")
     public Result<?> cancelOrder(@PathVariable("orderSn") String orderSn) {
+        log.info("收到取消订单请求, orderSn={}", orderSn);
         try {
             orderService.cancelOrder(orderSn);
             return Result.success();

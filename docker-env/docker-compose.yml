@@ -19,11 +19,24 @@ services:
     container_name: redis-server
     ports:
       - "6379:6379"   # 映射容器的6379端口到主机的6379端口
-    volumes:
-      - redis-data:/data  # 将Redis的数据目录挂载到本地
+#    volumes:
+#      - redis-data:/data  # 将Redis的数据目录挂载到本地
     networks:
       - redis-network
     restart: always   # 容器崩溃后自动重启
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq-server
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    networks:
+      - redis-network
+    restart: always
 
 volumes:
   redis-data:  # 持久化存储

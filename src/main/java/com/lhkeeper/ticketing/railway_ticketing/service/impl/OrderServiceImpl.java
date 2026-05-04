@@ -5,11 +5,14 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
 import com.lhkeeper.ticketing.railway_ticketing.context.UserContext;
+import com.lhkeeper.ticketing.railway_ticketing.config.RabbitMQConfig;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.FlashOrderMessageDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.RouteDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.PayCallbackReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderItemDetailDTO;
@@ -28,11 +31,14 @@ import com.lhkeeper.ticketing.railway_ticketing.service.handler.select.SeatSelec
 import com.lhkeeper.ticketing.railway_ticketing.util.SnowflakeUtil;
 import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -40,6 +46,10 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageBuilder;
+
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements OrderService {
@@ -58,6 +68,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final SeatMapper seatMapper;
     private final SnowflakeUtil snowflakeUtil;
     private final StringRedisTemplate stringRedisTemplate;
+    private final RabbitTemplate rabbitTemplate;
     private final TicketServiceImpl ticketServiceImpl;
     private final OrderItemServiceImpl orderItemServiceImpl;
 
@@ -66,6 +77,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     public OrderCreateRespDTO createOrder(OrderCreateReqDTO reqDTO) {
         orderCreateChainContext.handler(ChainMarkEnum.ORDER_CREATE.name(), reqDTO);
         String orderSn = String.valueOf(snowflakeUtil.generateId());
+        log.info("开始创建订单, orderSn={}, trainId={}, passengers={}, userId={}",
+                orderSn, reqDTO.getTrainId(), reqDTO.getPassengers().size(), UserContext.get().getUserId());
 
         Order order = buildOrder(reqDTO, orderSn);
 
@@ -124,6 +137,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         ticketServiceImpl.saveBatch(tickets);
         orderItemServiceImpl.saveBatch(orderItems);
 
+        sendOrderTimeoutMessage(orderSn);
+
+        log.info("订单创建成功, orderSn={}", orderSn);
         return OrderCreateRespDTO.builder()
                 .orderSn(order.getOrderSn())
                 .orderItemDTOS(orderItemDTOs)
@@ -181,6 +197,102 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .build();
     }
 
+    @Transactional(rollbackFor = Throwable.class)
+    @Override
+    public FlashOrderCreateRespDTO flashCreateOrder(OrderCreateReqDTO reqDTO) {
+        orderCreateChainContext.handler(ChainMarkEnum.ORDER_CREATE.name(), reqDTO);
+        String orderSn = String.valueOf(snowflakeUtil.generateId());
+        Long trainId = Long.valueOf(reqDTO.getTrainId());
+
+        Order order = buildOrder(reqDTO, orderSn);
+        order.setStatus(OrderStatusEnum.PENDING.getCode());
+        orderMapper.insert(order);
+
+        FlashOrderMessageDTO msg = FlashOrderMessageDTO.builder()
+                .orderSn(orderSn)
+                .trainId(trainId)
+                .startStation(reqDTO.getStartStation())
+                .endStation(reqDTO.getEndStation())
+                .passengers(reqDTO.getPassengers())
+                .build();
+        rabbitTemplate.convertAndSend(RabbitMQConfig.FLASH_ORDER_EXCHANGE,
+                RabbitMQConfig.FLASH_ORDER_ROUTING_KEY, msg);
+        log.info("抢票消息已发送, orderSn={}", orderSn);
+
+        return FlashOrderCreateRespDTO.builder()
+                .orderSn(orderSn)
+                .message("已进入排队，请稍后查询订单状态")
+                .build();
+    }
+
+    @Transactional(rollbackFor = Throwable.class)
+    @Override
+    public void processFlashOrder(FlashOrderMessageDTO msg) {
+        String orderSn = msg.getOrderSn();
+        Order order = orderMapper.selectOne(
+                Wrappers.lambdaQuery(Order.class)
+                        .eq(Order::getOrderSn, orderSn)
+        );
+        if (order == null) {
+            log.error("抢票订单不存在, orderSn={}", orderSn);
+            return;
+        }
+        if (!OrderStatusEnum.PENDING.getCode().equals(order.getStatus())) {
+            log.info("订单已处理（幂等跳过）, orderSn={}, status={}", orderSn, order.getStatus());
+            return;
+        }
+
+        try {
+            List<TicketDTO> ticketDTOs = seatSelector.selectAndLockSeats(
+                    msg.getTrainId(), msg.getStartStation(), msg.getEndStation(), msg.getPassengers());
+
+            List<OrderItem> orderItems = new ArrayList<>();
+            List<Ticket> tickets = new ArrayList<>();
+            for (TicketDTO ticketDTO : ticketDTOs) {
+                orderItems.add(OrderItem.builder()
+                        .orderSn(orderSn)
+                        .phone(ticketDTO.getPhone())
+                        .userId(order.getUserId())
+                        .username(order.getUsername())
+                        .trainId(msg.getTrainId())
+                        .carriageNumber(ticketDTO.getCarriageNumber())
+                        .seatType(ticketDTO.getSeatType())
+                        .seatNumber(ticketDTO.getSeatNumber())
+                        .realName(ticketDTO.getRealName())
+                        .idType(ticketDTO.getIdType())
+                        .idCard(ticketDTO.getIdCard())
+                        .ticketType(ticketDTO.getUserType())
+                        .status(TicketStatusEnum.UNPAID.getCode())
+                        .amount(ticketDTO.getAmount())
+                        .build()
+                );
+                tickets.add(Ticket.builder()
+                        .orderSn(orderSn)
+                        .username(order.getUsername())
+                        .trainId(msg.getTrainId())
+                        .carriageNumber(ticketDTO.getCarriageNumber())
+                        .seatNumber(ticketDTO.getSeatNumber())
+                        .passengerId(Long.parseLong(ticketDTO.getPassengerId()))
+                        .ticketStatus(TicketStatusEnum.UNPAID.getCode())
+                        .build()
+                );
+            }
+
+            orderItemServiceImpl.saveBatch(orderItems);
+            ticketServiceImpl.saveBatch(tickets);
+            order.setStatus(OrderStatusEnum.UNPAID.getCode());
+            orderMapper.updateById(order);
+
+            sendOrderTimeoutMessage(orderSn);
+
+            log.info("抢票订单处理成功, orderSn={}", orderSn);
+        } catch (Exception e) {
+            log.error("抢票订单处理失败, orderSn={}", orderSn, e);
+            order.setStatus(OrderStatusEnum.CANCELED.getCode());
+            orderMapper.updateById(order);
+        }
+    }
+
     private Train getTrainInfo(Long trainId) {
         String trainKey = String.format(RedisConstant.TRAINID_TO_TRAIN_MAPPING, trainId);
         String trainJSON = stringRedisTemplate.opsForValue().get(trainKey);
@@ -219,11 +331,29 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
     }
 
+    private void sendOrderTimeoutMessage(String orderSn) {
+        try {
+            Message message = MessageBuilder
+                    .withBody(orderSn.getBytes(StandardCharsets.UTF_8))
+                    .setExpiration(RabbitMQConfig.ORDER_TIMEOUT_MS)
+                    .build();
+            rabbitTemplate.send(
+                    RabbitMQConfig.ORDER_TIMEOUT_DELAY_EXCHANGE,
+                    RabbitMQConfig.ORDER_TIMEOUT_DELAY_ROUTING_KEY,
+                    message);
+            log.info("超时取消消息已发送, orderSn={}, ttl={}ms", orderSn,
+                    RabbitMQConfig.ORDER_TIMEOUT_MS);
+        } catch (Exception e) {
+            log.error("发送超时取消消息失败, orderSn={}", orderSn, e);
+        }
+    }
+
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public void payOrder(String orderSn) {
         orderPayChainContext.handler(ChainMarkEnum.ORDER_PAY.name(), orderSn);
 
+        log.info("开始支付, orderSn={}", orderSn);
         List<OrderItem> orderItems = orderItemMapper.selectList(
                 Wrappers.lambdaQuery(OrderItem.class)
                         .eq(OrderItem::getOrderSn, orderSn)
@@ -240,6 +370,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .status("PENDING")
                 .build();
         payMapper.insert(pay);
+        log.info("支付记录已创建, orderSn={}, paySn={}, amount={}", orderSn, pay.getPaySn(), totalAmount);
     }
 
     @Transactional(rollbackFor = Throwable.class)
@@ -247,14 +378,18 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     public void handlePayNotify(PayCallbackReqDTO reqDTO) {
         payNotifyChainContext.handler(ChainMarkEnum.PAY_NOTIFY.name(), reqDTO);
 
+        log.info("收到支付回调, orderSn={}, status={}, tradeNo={}",
+                reqDTO.getOrderSn(), reqDTO.getStatus(), reqDTO.getTradeNo());
         Order order = orderMapper.selectOne(
                 Wrappers.lambdaQuery(Order.class)
                         .eq(Order::getOrderSn, reqDTO.getOrderSn())
         );
         if (order == null) {
+            log.warn("支付回调-订单不存在, orderSn={}", reqDTO.getOrderSn());
             throw new ClientException("订单不存在");
         }
         if (OrderStatusEnum.CANCELED.getCode().equals(order.getStatus())) {
+            log.warn("支付回调-订单已取消, orderSn={}", reqDTO.getOrderSn());
             throw new ClientException("订单已取消");
         }
 
@@ -279,6 +414,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                             .eq(Ticket::getOrderSn, reqDTO.getOrderSn())
                             .set(Ticket::getTicketStatus, TicketStatusEnum.PAID.getCode())
             );
+            log.info("支付成功, orderSn={}", reqDTO.getOrderSn());
+        } else {
+            log.warn("支付失败, orderSn={}", reqDTO.getOrderSn());
         }
 
         Pay pay = payMapper.selectOne(
@@ -367,14 +505,17 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     public void cancelOrder(String orderSn) {
         orderCancelChainContext.handler(ChainMarkEnum.ORDER_CANCEL.name(), orderSn);
 
+        log.info("开始取消订单, orderSn={}", orderSn);
         Order order = orderMapper.selectOne(
                 Wrappers.lambdaQuery(Order.class)
                         .eq(Order::getOrderSn, orderSn)
         );
         if (order == null) {
+            log.warn("取消订单-订单不存在, orderSn={}", orderSn);
             throw new ClientException("订单不存在");
         }
         if (OrderStatusEnum.CANCELED.getCode().equals(order.getStatus())) {
+            log.warn("取消订单-订单已取消, orderSn={}", orderSn);
             throw new ClientException("订单已取消");
         }
 
@@ -440,5 +581,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                     order.getTrainId(), route.getStartStation(), route.getEndStation());
             stringRedisTemplate.delete(stockCacheKey);
         }
+
+        log.info("订单已取消, orderSn={}, wasPaid={}, itemStatus={}", orderSn, wasPaid, itemStatus);
     }
 }

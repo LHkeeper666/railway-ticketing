@@ -4,7 +4,8 @@ public enum OrderStatusEnum {
 
     UNPAID(0),
     PAID(1),
-    CANCELED(2);
+    CANCELED(2),
+    PENDING(3);
 
     private final Integer code;
 

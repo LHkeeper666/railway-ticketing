@@ -3,7 +3,6 @@ package com.lhkeeper.ticketing.railway_ticketing.service.handler.select;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderCreatePassengerDetailDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.RouteDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
@@ -38,21 +37,31 @@ public class SeatSelector {
     private final StringRedisTemplate stringRedisTemplate;
 
     public List<TicketDTO> selectSeats(OrderCreateReqDTO orderCreateReqDTO) throws ServiceException {
-        List<String> passengerIds = orderCreateReqDTO.getPassengers().stream()
+        return selectAndLockSeats(
+                Long.parseLong(orderCreateReqDTO.getTrainId()),
+                orderCreateReqDTO.getStartStation(),
+                orderCreateReqDTO.getEndStation(),
+                orderCreateReqDTO.getPassengers()
+        );
+    }
+
+    public List<TicketDTO> selectAndLockSeats(Long trainId, String startStation, String endStation,
+                                              List<OrderCreatePassengerDetailDTO> passengers) throws ServiceException {
+        List<String> passengerIds = passengers.stream()
                 .map(OrderCreatePassengerDetailDTO::getPassengerId).toList();
 
-        List<Passenger> passengers = passengerMapper.selectByIds(passengerIds);
-        if (passengers.isEmpty()) {
+        List<Passenger> passengerDOs = passengerMapper.selectByIds(passengerIds);
+        if (passengerDOs.isEmpty()) {
             throw new ServiceException("无乘车人");
         }
-        Map<Long, Passenger> idToPassenger = passengers.stream()
+        Map<Long, Passenger> idToPassenger = passengerDOs.stream()
                 .collect(Collectors.toMap(
                         Passenger::getId,
                         Function.identity()
                 ));
 
         List<TicketDTO> ticketDTOList = new ArrayList<>();
-        orderCreateReqDTO.getPassengers().forEach(passenger -> {
+        passengers.forEach(passenger -> {
             Passenger passengerDO = idToPassenger.get(Long.parseLong(passenger.getPassengerId()));
             ticketDTOList.add(TicketDTO.builder()
                     .seatType(passenger.getSeatType())
@@ -66,18 +75,17 @@ public class SeatSelector {
             );
         });
 
-        // 按座位类型分组
         Map<Integer, List<TicketDTO>> groupedBySeatType = ticketDTOList.stream()
                 .collect(Collectors.groupingBy(TicketDTO::getSeatType));
 
+        String trainIdStr = String.valueOf(trainId);
         for (Map.Entry<Integer, List<TicketDTO>> entry : groupedBySeatType.entrySet()) {
             Integer seatType = entry.getKey();
             List<TicketDTO> sameTypeTickets = entry.getValue();
             int needCount = sameTypeTickets.size();
 
-            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "seat:" + orderCreateReqDTO.getTrainId() + ":"
-                    + orderCreateReqDTO.getStartStation() + ":" + orderCreateReqDTO.getEndStation()
-                    + ":" + seatType;
+            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "seat:" + trainIdStr + ":"
+                    + startStation + ":" + endStation + ":" + seatType;
             boolean acquired = Boolean.TRUE.equals(
                     stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS)
             );
@@ -88,23 +96,21 @@ public class SeatSelector {
                 List<Seat> availableSeats = seatMapper.selectList(
                         Wrappers.lambdaQuery(Seat.class)
                                 .eq(Seat::getSeatType, seatType)
-                                .eq(Seat::getTrainId, orderCreateReqDTO.getTrainId())
-                                .eq(Seat::getStartStation, orderCreateReqDTO.getStartStation())
-                                .eq(Seat::getEndStation, orderCreateReqDTO.getEndStation())
+                                .eq(Seat::getTrainId, trainId)
+                                .eq(Seat::getStartStation, startStation)
+                                .eq(Seat::getEndStation, endStation)
                                 .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
                 );
                 if (availableSeats.size() < needCount) {
                     throw new ServiceException("余票不足");
                 }
 
-                // 计算全部重叠区间
-                Long trainId = Long.parseLong(orderCreateReqDTO.getTrainId());
                 List<TrainStation> trainStations = trainStationMapper.selectList(
                         Wrappers.lambdaQuery(TrainStation.class)
                                 .eq(TrainStation::getTrainId, trainId)
                 );
                 List<RouteDTO> takeoutRoutes = StationCalculateUtil.takeoutStation(
-                        trainStations, orderCreateReqDTO.getStartStation(), orderCreateReqDTO.getEndStation());
+                        trainStations, startStation, endStation);
 
                 for (int i = 0; i < needCount; i++) {
                     Seat chosenSeat = availableSeats.get(i);
@@ -114,7 +120,6 @@ public class SeatSelector {
                     ticketDTO.setAmount(chosenSeat.getPrice());
                     ticketDTO.setCarriageNumber(chosenSeat.getCarriageNumber());
 
-                    // 锁定全部重叠区间
                     for (RouteDTO route : takeoutRoutes) {
                         LambdaUpdateWrapper<Seat> wrapper = new LambdaUpdateWrapper<Seat>()
                                 .eq(Seat::getTrainId, trainId)
@@ -135,17 +140,15 @@ public class SeatSelector {
             }
         }
 
-        // 失效全部重叠区间的余票缓存
-        Long trainId = Long.parseLong(orderCreateReqDTO.getTrainId());
         List<TrainStation> allStations = trainStationMapper.selectList(
                 Wrappers.lambdaQuery(TrainStation.class)
                         .eq(TrainStation::getTrainId, trainId)
         );
         List<RouteDTO> cacheInvalidateRoutes = StationCalculateUtil.takeoutStation(
-                allStations, orderCreateReqDTO.getStartStation(), orderCreateReqDTO.getEndStation());
+                allStations, startStation, endStation);
         for (RouteDTO route : cacheInvalidateRoutes) {
             String stockCacheKey = String.format(RedisConstant.TICKET_STOCKING_MAPPING,
-                    orderCreateReqDTO.getTrainId(), route.getStartStation(), route.getEndStation());
+                    trainIdStr, route.getStartStation(), route.getEndStation());
             stringRedisTemplate.delete(stockCacheKey);
         }
 
