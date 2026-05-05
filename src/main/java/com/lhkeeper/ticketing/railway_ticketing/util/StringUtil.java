@@ -1,5 +1,8 @@
 package com.lhkeeper.ticketing.railway_ticketing.util;
 
+/**
+ * 字符串工具类，提供空值判断和空白字符判断
+ */
 public class StringUtil {
 
     public static boolean isBlank(String str) {

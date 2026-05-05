@@ -10,12 +10,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 列车区间表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 列车区间实体，记录列车途经各站点的信息
  */
 @Data
 @NoArgsConstructor

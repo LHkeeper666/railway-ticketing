@@ -2,6 +2,9 @@ package com.lhkeeper.ticketing.railway_ticketing.util;
 
 import org.springframework.stereotype.Component;
 
+/**
+ * 雪花算法 ID 生成器，生成全局唯一的长整型 ID
+ */
 @Component
 public class SnowflakeUtil {
 
@@ -17,6 +20,7 @@ public class SnowflakeUtil {
 //        this.nodeID = nodeID;
 //    }
 
+    /** 生成下一个唯一 ID，线程安全 */
     public synchronized long generateId() {
         long timestamp = System.currentTimeMillis() - EPOCH;
         if (timestamp < lastTimestamp) {

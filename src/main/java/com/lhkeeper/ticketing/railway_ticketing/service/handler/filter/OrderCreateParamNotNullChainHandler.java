@@ -7,6 +7,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.Objects;
 
+/**
+ * 订单创建参数非空校验（order 0）
+ */
 @Component
 public class OrderCreateParamNotNullChainHandler implements OrderCreateChainFilter<OrderCreateReqDTO> {
 

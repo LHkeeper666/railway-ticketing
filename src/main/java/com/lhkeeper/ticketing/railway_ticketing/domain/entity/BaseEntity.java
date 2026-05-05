@@ -5,6 +5,9 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * 实体基类，提供公共字段：主键ID、创建时间、修改时间、逻辑删除标识
+ */
 @Data
 public class BaseEntity {
 

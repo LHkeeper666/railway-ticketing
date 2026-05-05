@@ -12,12 +12,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 支付表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 支付记录实体
  */
 @Data
 @Builder

@@ -8,6 +8,9 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Date;
 
+/**
+ * 日期工具类，提供日期格式校验和是否早于今天判断
+ */
 public class DateUtil {
 
     public static boolean validateFormat(Date date, String pattern) {

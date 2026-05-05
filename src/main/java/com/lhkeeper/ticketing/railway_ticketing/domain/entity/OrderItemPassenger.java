@@ -9,12 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 乘车人订单关系表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 乘车人订单关系实体
  */
 @Data
 @NoArgsConstructor

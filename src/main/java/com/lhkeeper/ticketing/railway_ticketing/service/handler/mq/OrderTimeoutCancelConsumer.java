@@ -16,6 +16,9 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 
+/**
+ * 订单超时取消消费者，消费延迟队列中的超时订单并执行取消
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor

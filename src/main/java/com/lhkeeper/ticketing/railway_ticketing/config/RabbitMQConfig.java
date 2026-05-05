@@ -11,6 +11,9 @@ import org.springframework.context.annotation.Configuration;
 
 import java.nio.charset.StandardCharsets;
 
+/**
+ * RabbitMQ 配置，声明抢票队列（含 DLX）和订单超时取消延迟队列（TTL + DLX）
+ */
 @Configuration
 public class RabbitMQConfig {
 

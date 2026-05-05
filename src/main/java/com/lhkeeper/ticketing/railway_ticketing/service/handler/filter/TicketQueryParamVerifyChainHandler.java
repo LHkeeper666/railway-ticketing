@@ -16,6 +16,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 余票查询参数有效性校验：Region 存在性、日期合法性（order 5）
+ */
 @Component
 @RequiredArgsConstructor
 public class TicketQueryParamVerifyChainHandler implements TicketQueryChainFilter<TicketPageQueryReqDTO> {

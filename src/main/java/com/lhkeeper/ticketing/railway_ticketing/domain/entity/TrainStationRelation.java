@@ -10,12 +10,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 列车站点关系表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 列车站点关系实体，记录列车任意两站之间的直达关系
  */
 @Data
 @NoArgsConstructor

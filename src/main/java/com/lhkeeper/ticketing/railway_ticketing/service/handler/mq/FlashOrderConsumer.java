@@ -14,6 +14,9 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 
+/**
+ * 抢票队列消费者，消费 FlashOrderMessage 并执行异步选座
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor

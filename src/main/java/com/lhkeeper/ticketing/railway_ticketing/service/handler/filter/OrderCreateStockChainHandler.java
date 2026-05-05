@@ -20,6 +20,9 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+/**
+ * 订单创建库存校验，检查余票是否充足（order 10）
+ */
 @Component
 @RequiredArgsConstructor
 public class OrderCreateStockChainHandler implements OrderCreateChainFilter<OrderCreateReqDTO> {

@@ -9,12 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 地区表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 地区/城市实体
  */
 @Data
 @NoArgsConstructor

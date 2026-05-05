@@ -10,6 +10,9 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
 
+/**
+ * JWT 工具类，提供 Token 生成、解析和过期验证（HS256 算法）
+ */
 @Component
 public class JwtUtil {
 
@@ -22,6 +25,7 @@ public class JwtUtil {
         this.expiration = expiration;
     }
 
+    /** 生成 JWT Token，包含 userId、username、phone 声明 */
     public String generateToken(Long userId, String username, String phone) {
         Date now = new Date();
         Date exp = new Date(now.getTime() + expiration * 1000);
@@ -35,6 +39,7 @@ public class JwtUtil {
                 .compact();
     }
 
+    /** 解析并验证 JWT Token */
     public Claims parseToken(String token) {
         return Jwts.parser()
                 .verifyWith(key)
@@ -43,6 +48,7 @@ public class JwtUtil {
                 .getPayload();
     }
 
+    /** 检查 Token 是否已过期 */
     public boolean isTokenExpired(String token) {
         try {
             return parseToken(token).getExpiration().before(new Date());

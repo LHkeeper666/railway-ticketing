@@ -11,6 +11,9 @@ import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import javax.sql.DataSource;
 
+/**
+ * 铁路售票系统启动入口
+ */
 @SpringBootApplication
 @MapperScan("com.lhkeeper.ticketing.railway_ticketing.mapper")
 public class RailwayTicketingApplication {

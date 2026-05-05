@@ -15,6 +15,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+/**
+ * 认证服务实现，处理登录验证、JWT 签发和用户注册
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
@@ -25,6 +28,9 @@ public class AuthServiceImpl implements AuthService {
     private final AbstractChainContext<LoginReqDTO> loginChainContext;
     private final AbstractChainContext<RegisterReqDTO> registerChainContext;
 
+    /**
+     * 用户登录：责任链校验参数 → 查用户 → 验密码 → 签发 JWT
+     */
     @Override
     public LoginRespDTO login(LoginReqDTO reqDTO) {
         loginChainContext.handler(ChainMarkEnum.AUTH_LOGIN.name(), reqDTO);
@@ -48,6 +54,9 @@ public class AuthServiceImpl implements AuthService {
                 .build();
     }
 
+    /**
+     * 用户注册：责任链校验参数 → 手机号唯一性检查 → 密码加密 → 入库
+     */
     @Override
     public void register(RegisterReqDTO reqDTO) {
         registerChainContext.handler(ChainMarkEnum.AUTH_REGISTER.name(), reqDTO);

@@ -16,6 +16,9 @@ import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.util.Collections;
 
+/**
+ * 令牌桶限流拦截器，通过 Redis Lua 脚本实现分布式限流
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor

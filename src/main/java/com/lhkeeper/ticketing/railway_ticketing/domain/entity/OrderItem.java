@@ -12,12 +12,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 订单明细表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 订单明细实体
  */
 @Data
 @Builder

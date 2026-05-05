@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 认证控制器，处理用户登录和注册
+ */
 @RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
@@ -18,11 +21,17 @@ public class AuthController {
 
     private final AuthService authService;
 
+    /**
+     * 用户登录，返回 JWT 令牌
+     */
     @PostMapping("/login")
     public Result<LoginRespDTO> login(@RequestBody LoginReqDTO reqDTO) {
         return Result.success(authService.login(reqDTO));
     }
 
+    /**
+     * 用户注册
+     */
     @PostMapping("/register")
     public Result<Void> register(@RequestBody RegisterReqDTO reqDTO) {
         authService.register(reqDTO);

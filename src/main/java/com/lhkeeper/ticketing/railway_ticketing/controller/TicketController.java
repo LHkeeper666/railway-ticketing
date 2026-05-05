@@ -16,12 +16,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 
 /**
- * <p>
- * 车票表 前端控制器
- * </p>
- *
- * @author jack
- * @since 2026-04-18
+ * 余票查询控制器
  */
 @RestController
 @RequestMapping("/ticket")
@@ -30,11 +25,17 @@ public class TicketController {
     @Autowired
     private TicketService ticketService;
 
+    /**
+     * 健康检查
+     */
     @GetMapping("/health")
     public String health() {
         return "OK";
     }
 
+    /**
+     * 余票分页查询，基于令牌桶限流
+     */
     @RateLimit(key = "ticket:query", capacity = 100, refillRate = 50.0)
     @GetMapping("/query")
     public Result<TicketPageQueryRespDTO> ticketQuery(TicketPageQueryReqDTO ticketPageQueryReqDTO) {

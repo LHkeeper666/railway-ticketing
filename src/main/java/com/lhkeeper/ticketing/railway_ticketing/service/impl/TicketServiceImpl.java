@@ -27,12 +27,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 /**
- * <p>
- * 车票表 服务实现类
- * </p>
- *
- * @author jack
- * @since 2026-04-18
+ * 余票查询服务实现，基于 Redis 缓存 + 分布式锁的查询逻辑
  */
 @Service
 @RequiredArgsConstructor
@@ -45,6 +40,9 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
     private final AbstractChainContext<TicketPageQueryReqDTO> ticketPageQueryContext;
     private final StringRedisTemplate stringRedisTemplate;
 
+    /**
+     * 分页查询余票：缓存读取区域映射 → 查车次关系 → 查列车信息 → 查座位库存 → 组装返回
+     */
     @Override
     public TicketPageQueryRespDTO queryTicketByPage(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
         // 参数校验

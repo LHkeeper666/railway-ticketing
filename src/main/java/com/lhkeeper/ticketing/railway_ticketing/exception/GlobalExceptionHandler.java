@@ -10,8 +10,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
-     @ExceptionHandler(Exception.class)
-     public Result<?> handle(Exception e) {
+    /**
+     * 统一异常处理，捕获所有 Exception 并返回失败响应
+     */
+    @ExceptionHandler(Exception.class)
+    public Result<?> handle(Exception e) {
          return Result.fail(e.getMessage());
      }
 }

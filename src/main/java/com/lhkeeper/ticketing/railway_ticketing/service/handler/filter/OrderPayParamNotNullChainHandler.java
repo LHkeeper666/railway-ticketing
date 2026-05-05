@@ -2,7 +2,12 @@ package com.lhkeeper.ticketing.railway_ticketing.service.handler.filter;
 
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.util.StringUtil;
+import org.springframework.stereotype.Component;
 
+/**
+ * 支付参数非空校验（order 0）
+ */
+@Component
 public class OrderPayParamNotNullChainHandler implements OrderPayChainFilter<String> {
 
 

@@ -13,6 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * 订单控制器，处理订单创建、支付、取消、详情查询等请求
+ */
 @Slf4j
 @RestController
 @RequestMapping("/order")
@@ -21,6 +24,9 @@ public class OrderController {
     @Autowired
     private OrderService orderService;
 
+    /**
+     * 创建订单（普通购票）
+     */
     @RateLimit(key = "order:create", capacity = 20, refillRate = 10.0)
     @PostMapping("/create")
     public Result<OrderCreateRespDTO> createOrder(@RequestBody OrderCreateReqDTO reqDTO) {
@@ -28,6 +34,9 @@ public class OrderController {
         return Result.success(orderService.createOrder(reqDTO));
     }
 
+    /**
+     * 抢票排队，订单写入 MQ 后立即返回
+     */
     @RateLimit(key = "order:flash-create", capacity = 50, refillRate = 30.0)
     @PostMapping("/flash-create")
     public Result<FlashOrderCreateRespDTO> flashCreate(@RequestBody OrderCreateReqDTO reqDTO) {
@@ -35,6 +44,9 @@ public class OrderController {
         return Result.success(orderService.flashCreateOrder(reqDTO));
     }
 
+    /**
+     * 模拟支付
+     */
     @PostMapping("/{orderSn}/pay")
     public Result<?> payOrder(@PathVariable("orderSn") String orderSn) {
         log.info("收到支付请求, orderSn={}", orderSn);
@@ -46,6 +58,9 @@ public class OrderController {
         }
     }
 
+    /**
+     * 支付回调，接收第三方支付平台通知（无需 JWT 认证）
+     */
     @PostMapping("/pay/notify")
     public Result<?> payNotify(@RequestBody PayCallbackReqDTO reqDTO) {
         log.info("收到支付回调请求, orderSn={}, status={}", reqDTO.getOrderSn(), reqDTO.getStatus());
@@ -57,11 +72,17 @@ public class OrderController {
         }
     }
 
+    /**
+     * 查询订单详情
+     */
     @GetMapping("/{orderSn}")
     public Result<OrderDetailRespDTO> getOrderDetail(@PathVariable("orderSn") String orderSn) {
         return Result.success(orderService.getOrderDetail(orderSn));
     }
 
+    /**
+     * 取消订单
+     */
     @PostMapping("/{orderSn}/cancel")
     public Result<?> cancelOrder(@PathVariable("orderSn") String orderSn) {
         log.info("收到取消订单请求, orderSn={}", orderSn);

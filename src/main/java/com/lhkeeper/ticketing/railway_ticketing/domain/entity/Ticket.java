@@ -10,12 +10,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 车票表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 车票实体
  */
 @Data
 @Builder

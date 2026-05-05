@@ -12,6 +12,9 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
+/**
+ * Redis 配置，读取 spring.data.redis 配置前缀，创建 RedisTemplate 和连接工厂
+ */
 @Configuration
 @ConfigurationProperties("spring.data.redis")
 @Data

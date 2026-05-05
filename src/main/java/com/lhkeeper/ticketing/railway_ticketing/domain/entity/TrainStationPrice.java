@@ -9,12 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 列车站点价格表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 列车站点价格实体，记录不同座位类型在各区间的票价
  */
 @Data
 @NoArgsConstructor

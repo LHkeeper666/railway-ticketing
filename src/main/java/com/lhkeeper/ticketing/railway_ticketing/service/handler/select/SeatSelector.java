@@ -27,6 +27,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+/**
+ * 座位选择器，负责选座锁定、全区间占座及缓存失效
+ */
 @Component
 @RequiredArgsConstructor
 public class SeatSelector {
@@ -36,6 +39,7 @@ public class SeatSelector {
     private final TrainStationMapper trainStationMapper;
     private final StringRedisTemplate stringRedisTemplate;
 
+    /** 普通购票选座，委托至 selectAndLockSeats */
     public List<TicketDTO> selectSeats(OrderCreateReqDTO orderCreateReqDTO) throws ServiceException {
         return selectAndLockSeats(
                 Long.parseLong(orderCreateReqDTO.getTrainId()),
@@ -45,6 +49,7 @@ public class SeatSelector {
         );
     }
 
+    /** 抢票选座并锁定：按座位类型分组 → 分布式锁 → 查可用座位 → 锁定全部重叠区间 */
     public List<TicketDTO> selectAndLockSeats(Long trainId, String startStation, String endStation,
                                               List<OrderCreatePassengerDetailDTO> passengers) throws ServiceException {
         List<String> passengerIds = passengers.stream()

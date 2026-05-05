@@ -5,6 +5,9 @@ import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.util.StringUtil;
 import org.springframework.stereotype.Component;
 
+/**
+ * 登录参数非空校验（order 0）
+ */
 @Component
 public class AuthLoginParamNotNullChainHandler implements AuthLoginChainFilter<LoginReqDTO> {
 

@@ -49,6 +49,9 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
 
+/**
+ * 订单服务实现，处理订单创建、抢票排队、支付、取消及超时管理
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -72,6 +75,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final TicketServiceImpl ticketServiceImpl;
     private final OrderItemServiceImpl orderItemServiceImpl;
 
+    /**
+     * 创建普通购票订单：责任链校验 → 选座锁定 → 写 Order/OrderItem/Ticket → 发送超时取消消息
+     */
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public OrderCreateRespDTO createOrder(OrderCreateReqDTO reqDTO) {
@@ -197,6 +203,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .build();
     }
 
+    /**
+     * 抢票排队：责任链校验 → 写 Order(PENDING) → 发送 MQ 消息 → 立即返回
+     */
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public FlashOrderCreateRespDTO flashCreateOrder(OrderCreateReqDTO reqDTO) {
@@ -225,6 +234,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .build();
     }
 
+    /**
+     * 处理抢票消息（MQ 消费端）：幂等检查 → 选座并锁定 → 写 OrderItem/Ticket → 发送超时消息
+     */
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public void processFlashOrder(FlashOrderMessageDTO msg) {
@@ -348,6 +360,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
     }
 
+    /**
+     * 模拟支付：责任链校验 → 计算订单总金额 → 生成 Pay 记录
+     */
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public void payOrder(String orderSn) {
@@ -373,6 +388,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         log.info("支付记录已创建, orderSn={}, paySn={}, amount={}", orderSn, pay.getPaySn(), totalAmount);
     }
 
+    /**
+     * 处理支付回调：责任链校验 → 幂等检查 → 更新 Order/OrderItem/Ticket/Pay 状态
+     */
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public void handlePayNotify(PayCallbackReqDTO reqDTO) {
@@ -435,6 +453,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
     }
 
+    /**
+     * 查询订单详情，组装订单项和支付信息
+     */
     @Override
     public OrderDetailRespDTO getOrderDetail(String orderSn) {
         Order order = orderMapper.selectOne(
@@ -500,6 +521,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .build();
     }
 
+    /**
+     * 取消订单：责任链校验 → 幂等检查 → 释放全部重叠区间座位 → 更新状态 → 失效缓存
+     */
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public void cancelOrder(String orderSn) {

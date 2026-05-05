@@ -10,12 +10,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 列车表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 列车实体
  */
 @Data
 @NoArgsConstructor

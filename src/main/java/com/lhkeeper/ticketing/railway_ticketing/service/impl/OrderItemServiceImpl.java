@@ -9,9 +9,10 @@ import com.lhkeeper.ticketing.railway_ticketing.service.OrderItemService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+/**
+ * 订单明细服务实现，继承 MyBatis-Plus 通用 CRUD
+ */
 @Service
 @RequiredArgsConstructor
 public class OrderItemServiceImpl extends ServiceImpl<OrderItemMapper, OrderItem> implements OrderItemService {
-
-
 }

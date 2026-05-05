@@ -10,6 +10,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.Objects;
 
+/**
+ * 支付参数有效性校验：订单存在性、状态合法性（order 5）
+ */
 @Component
 @RequiredArgsConstructor
 public class OrderPayParamValidateChainHandler implements OrderPayChainFilter<String> {

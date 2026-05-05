@@ -9,12 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 用户表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 用户实体
  */
 @Data
 @NoArgsConstructor

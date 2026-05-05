@@ -11,12 +11,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * <p>
- * 座位表
- * </p>
- *
- * @author jack
- * @since 2026-04-21
+ * 座位实体
  */
 @Data
 @NoArgsConstructor
