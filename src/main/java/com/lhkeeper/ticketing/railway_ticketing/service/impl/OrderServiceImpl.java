@@ -36,6 +36,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -224,9 +226,15 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .endStation(reqDTO.getEndStation())
                 .passengers(reqDTO.getPassengers())
                 .build();
-        rabbitTemplate.convertAndSend(RabbitMQConfig.FLASH_ORDER_EXCHANGE,
-                RabbitMQConfig.FLASH_ORDER_ROUTING_KEY, msg);
-        log.info("抢票消息已发送, orderSn={}", orderSn);
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        rabbitTemplate.convertAndSend(RabbitMQConfig.FLASH_ORDER_EXCHANGE,
+                                RabbitMQConfig.FLASH_ORDER_ROUTING_KEY, msg);
+                        log.info("抢票消息已发送, orderSn={}", orderSn);
+                    }
+                });
 
         return FlashOrderCreateRespDTO.builder()
                 .orderSn(orderSn)
@@ -244,10 +252,11 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         Order order = orderMapper.selectOne(
                 Wrappers.lambdaQuery(Order.class)
                         .eq(Order::getOrderSn, orderSn)
+                        .last("FOR UPDATE")
         );
         if (order == null) {
-            log.error("抢票订单不存在, orderSn={}", orderSn);
-            return;
+            log.warn("抢票订单尚未提交(事务未提交或主从延迟), orderSn={}", orderSn);
+            throw new ServiceException("订单尚未提交，稍后重试");
         }
         if (!OrderStatusEnum.PENDING.getCode().equals(order.getStatus())) {
             log.info("订单已处理（幂等跳过）, orderSn={}, status={}", orderSn, order.getStatus());
@@ -298,8 +307,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             sendOrderTimeoutMessage(orderSn);
 
             log.info("抢票订单处理成功, orderSn={}", orderSn);
-        } catch (Exception e) {
-            log.error("抢票订单处理失败, orderSn={}", orderSn, e);
+        } catch (ClientException e) {
+            log.warn("抢票订单业务失败, orderSn={}, msg={}", orderSn, e.getMessage());
             order.setStatus(OrderStatusEnum.CANCELED.getCode());
             orderMapper.updateById(order);
         }

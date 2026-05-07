@@ -11,6 +11,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Passenger;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Seat;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.TrainStation;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
@@ -29,6 +30,7 @@ import java.util.stream.Collectors;
 
 /**
  * 座位选择器，负责选座锁定、全区间占座及缓存失效
+ * TODO: 座位选择这块应该还可以再优化，目前似乎会有多个订单互相冲突的问题
  */
 @Component
 @RequiredArgsConstructor
@@ -57,7 +59,7 @@ public class SeatSelector {
 
         List<Passenger> passengerDOs = passengerMapper.selectByIds(passengerIds);
         if (passengerDOs.isEmpty()) {
-            throw new ServiceException("无乘车人");
+            throw new ClientException("无乘车人");
         }
         Map<Long, Passenger> idToPassenger = passengerDOs.stream()
                 .collect(Collectors.toMap(
@@ -107,7 +109,7 @@ public class SeatSelector {
                                 .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
                 );
                 if (availableSeats.size() < needCount) {
-                    throw new ServiceException("余票不足");
+                    throw new ClientException("余票不足");
                 }
 
                 List<TrainStation> trainStations = trainStationMapper.selectList(

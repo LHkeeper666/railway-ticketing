@@ -34,9 +34,9 @@ public class FlashOrderConsumer {
             channel.basicAck(deliveryTag, false);
             log.info("抢票处理成功, orderSn={}", msg.getOrderSn());
         } catch (Exception e) {
-            log.error("抢票处理失败, body={}", messageBody, e);
+            log.error("抢票处理失败，重新入队, body={}", messageBody, e);
             try {
-                channel.basicNack(deliveryTag, false, false);
+                channel.basicNack(deliveryTag, false, true);
             } catch (IOException ex) {
                 log.error("nack 失败", ex);
             }

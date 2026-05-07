@@ -2,7 +2,6 @@ package com.lhkeeper.ticketing.railway_ticketing.interceptor;
 
 import com.lhkeeper.ticketing.railway_ticketing.common.annotation.RateLimit;
 import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
-import com.lhkeeper.ticketing.railway_ticketing.common.result.Result;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
