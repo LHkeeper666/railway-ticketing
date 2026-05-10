@@ -8,14 +8,17 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.TicketPageQueryRe
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.TicketPageQueryRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
-import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
+import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
+import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationPriceMapper;
+import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TicketMapper;
 import com.lhkeeper.ticketing.railway_ticketing.service.TicketService;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -37,6 +40,8 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
     private final SeatMapper seatMapper;
     private final RegionMapper regionMapper;
     private final TrainStationRelationMapper trainStationRelationMapper;
+    private final TrainStationMapper trainStationMapper;
+    private final TrainStationPriceMapper trainStationPriceMapper;
     private final AbstractChainContext<TicketPageQueryReqDTO> ticketPageQueryContext;
     private final StringRedisTemplate stringRedisTemplate;
 
@@ -185,6 +190,17 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
             each.setTrainBrand(train.getTrainBrand());
         });
 
+        // 预加载所有列车的站点序列，用于计算位图掩码
+        Set<Long> trainIdsForStations = trainServices.stream().map(TrainServiceDTO::getTrainId).collect(Collectors.toSet());
+        Map<Long, List<TrainStation>> trainStationMap = new HashMap<>();
+        for (Long tid : trainIdsForStations) {
+            List<TrainStation> stations = trainStationMapper.selectList(
+                    Wrappers.lambdaQuery(TrainStation.class)
+                            .eq(TrainStation::getTrainId, tid)
+            );
+            trainStationMap.put(tid, stations);
+        }
+
         // 获取 seat_class_list
         for (TrainServiceDTO each : trainServices) {
             String key = String.format(RedisConstant.TICKET_STOCKING_MAPPING, each.getTrainId(), each.getStartStation(), each.getEndStation());
@@ -192,13 +208,16 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
             String cachedString = stringRedisTemplate.opsForValue().get(key);
             List<Seat> seats = null;
             if (cachedString == null) {
+                long queryMask = StationCalculateUtil.bitmapMask(
+                        trainStationMap.get(each.getTrainId()), each.getStartStation(), each.getEndStation());
                 seats = seatMapper.selectList(
                         Wrappers.lambdaQuery(Seat.class)
                                 .eq(Seat::getTrainId, each.getTrainId())
-                                .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
-                                .eq(Seat::getStartStation, each.getStartStation())
-                                .eq(Seat::getEndStation, each.getEndStation())
+                                .apply("(seat_bitmap & {0}) = 0", queryMask)
                 );
+                // 为各座位类型设置正确的区间价格
+                setSeatPrices(seats, each.getTrainId(), each.getStartStation(), each.getEndStation());
+
                 String lockKey = RedisConstant.LOCK_KEY_PREFIX + "seat:" + each.getTrainId() + ":" + each.getStartStation() + ":" + each.getEndStation();
                 boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
                 if (!lockAcquired) {
@@ -231,5 +250,26 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
         return TicketPageQueryRespDTO.builder()
                 .trainServiceList(trainServices)
                 .build();
+    }
+
+    private void setSeatPrices(List<Seat> seats, Long trainId, String startStation, String endStation) {
+        if (seats.isEmpty()) return;
+        Set<Integer> seatTypes = seats.stream().map(Seat::getSeatType).collect(Collectors.toSet());
+        List<TrainStationPrice> prices = trainStationPriceMapper.selectList(
+                Wrappers.lambdaQuery(TrainStationPrice.class)
+                        .eq(TrainStationPrice::getTrainId, trainId)
+                        .eq(TrainStationPrice::getStartStation, startStation)
+                        .eq(TrainStationPrice::getEndStation, endStation)
+                        .in(TrainStationPrice::getSeatType, seatTypes)
+        );
+        Map<Integer, BigDecimal> priceMap = prices.stream()
+                .collect(Collectors.toMap(
+                        TrainStationPrice::getSeatType,
+                        p -> BigDecimal.valueOf(p.getPrice())
+                ));
+        seats.forEach(seat -> {
+            BigDecimal p = priceMap.get(seat.getSeatType());
+            if (p != null) seat.setPrice(p);
+        });
     }
 }

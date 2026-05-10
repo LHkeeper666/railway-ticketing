@@ -80,6 +80,29 @@ public final class StationCalculateUtil {
         return result;
     }
 
+    /**
+     * 计算购买区间的位图掩码，每个 bit 对应一个相邻站点段
+     * 例如 北京南→南京南 拆分为 北京南→济南西(bit0) + 济南西→南京南(bit1)，掩码 = 0b11
+     */
+    public static long bitmapMask(List<TrainStation> stations, String departure, String arrival) {
+        List<RouteDTO> segments = throughStation(stations, departure, arrival);
+
+        List<TrainStation> sorted = new ArrayList<>(stations);
+        sorted.sort(Comparator.comparing(TrainStation::getSequence));
+        List<String> stationNames = sorted.stream()
+                .map(TrainStation::getStartStation)
+                .toList();
+
+        long mask = 0;
+        for (RouteDTO segment : segments) {
+            int bitIndex = stationNames.indexOf(segment.getStartStation());
+            if (bitIndex >= 0) {
+                mask |= (1L << bitIndex);
+            }
+        }
+        return mask;
+    }
+
     private static int findEndStationIdx(List<TrainStation> stations, String stationName) {
         for (int i = 0; i < stations.size(); i++) {
             if (stationName.equals(stations.get(i).getEndStation())) {

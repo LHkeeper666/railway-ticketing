@@ -33,15 +33,14 @@ CREATE TABLE `t_seat`
     `carriage_number` varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '车厢号',
     `seat_number`     varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '座位号',
     `seat_type`       int(3) DEFAULT NULL COMMENT '座位类型',
-    `start_station`   varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '起始站',
-    `end_station`     varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '终点站',
-    `price`           int(11) DEFAULT NULL COMMENT '车票价格',
+    `seat_bitmap`     bigint(20) DEFAULT 0 COMMENT '座位占用位图，每bit对应一个相邻站点段',
+    `price`           int(11) DEFAULT NULL COMMENT '车票价格（基础价格，实际价格查t_train_station_price）',
     `seat_status`     int(3) DEFAULT NULL COMMENT '座位状态',
     `create_time`     datetime                                DEFAULT NULL COMMENT '创建时间',
     `update_time`     datetime                                DEFAULT NULL COMMENT '修改时间',
     `del_flag`        tinyint(1) DEFAULT NULL COMMENT '删除标识',
     PRIMARY KEY (`id`),
-    KEY               `idx_train_id` (`train_id`) USING BTREE
+    KEY               `idx_train_type` (`train_id`, `seat_type`) USING BTREE
 ) ENGINE=InnoDB AUTO_INCREMENT=1683022080920494081 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='座位表';
 
 CREATE TABLE `t_station`

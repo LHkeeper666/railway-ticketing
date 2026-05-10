@@ -46,16 +46,10 @@ public class Seat extends BaseEntity {
     private Integer seatType;
 
     /**
-     * 起始站
+     * 座位占用位图，每个 bit 对应一个相邻站点段 (1=占用, 0=空闲)
      */
-    @TableField("start_station")
-    private String startStation;
-
-    /**
-     * 终点站
-     */
-    @TableField("end_station")
-    private String endStation;
+    @TableField("seat_bitmap")
+    private Long seatBitmap;
 
     /**
      * 车票价格

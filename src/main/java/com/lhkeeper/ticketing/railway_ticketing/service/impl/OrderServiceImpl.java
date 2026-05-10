@@ -554,32 +554,28 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         boolean wasPaid = OrderStatusEnum.PAID.getCode().equals(order.getStatus());
 
-        // 获取列车路线，计算全部重叠区间
+        // 计算购买区间的位图掩码
         List<TrainStation> trainStations = trainStationMapper.selectList(
                 Wrappers.lambdaQuery(TrainStation.class)
                         .eq(TrainStation::getTrainId, order.getTrainId())
         );
-        List<RouteDTO> takeoutRoutes = StationCalculateUtil.takeoutStation(
+        long purchaseMask = StationCalculateUtil.bitmapMask(
                 trainStations, order.getStartStation(), order.getEndStation());
 
-        // 释放全部重叠区间的座位
+        // 位图释放座位：清除购买区间对应的位
         List<Ticket> tickets = ticketMapper.selectList(
                 Wrappers.lambdaQuery(Ticket.class)
                         .eq(Ticket::getOrderSn, orderSn)
         );
         for (Ticket ticket : tickets) {
-            for (RouteDTO route : takeoutRoutes) {
-                seatMapper.update(null,
-                        Wrappers.lambdaUpdate(Seat.class)
-                                .eq(Seat::getTrainId, ticket.getTrainId())
-                                .eq(Seat::getCarriageNumber, ticket.getCarriageNumber())
-                                .eq(Seat::getSeatNumber, ticket.getSeatNumber())
-                                .eq(Seat::getStartStation, route.getStartStation())
-                                .eq(Seat::getEndStation, route.getEndStation())
-                                .eq(Seat::getSeatStatus, SeatStatusEnum.LOCKED.getCode())
-                                .set(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
-                );
-            }
+            seatMapper.update(null,
+                    Wrappers.lambdaUpdate(Seat.class)
+                            .eq(Seat::getTrainId, ticket.getTrainId())
+                            .eq(Seat::getCarriageNumber, ticket.getCarriageNumber())
+                            .eq(Seat::getSeatNumber, ticket.getSeatNumber())
+                            .apply("(seat_bitmap & {0}) = {0}", purchaseMask)
+                            .setSql("seat_bitmap = seat_bitmap & ~" + purchaseMask)
+            );
         }
 
         // 更新订单状态
@@ -609,6 +605,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
 
         // 失效全部重叠区间的余票缓存
+        List<RouteDTO> takeoutRoutes = StationCalculateUtil.takeoutStation(
+                trainStations, order.getStartStation(), order.getEndStation());
         for (RouteDTO route : takeoutRoutes) {
             String stockCacheKey = String.format(RedisConstant.TICKET_STOCKING_MAPPING,
                     order.getTrainId(), route.getStartStation(), route.getEndStation());

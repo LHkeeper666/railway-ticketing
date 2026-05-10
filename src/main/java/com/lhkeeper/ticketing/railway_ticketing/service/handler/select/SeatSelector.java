@@ -10,17 +10,19 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Passenger;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Seat;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.TrainStation;
-import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.entity.TrainStationPrice;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
+import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationPriceMapper;
 import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -29,8 +31,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * 座位选择器，负责选座锁定、全区间占座及缓存失效
- * TODO: 座位选择这块应该还可以再优化，目前似乎会有多个订单互相冲突的问题
+ * 座位选择器，基于位图模型选座并原子锁定
  */
 @Component
 @RequiredArgsConstructor
@@ -39,6 +40,7 @@ public class SeatSelector {
     private final PassengerMapper passengerMapper;
     private final SeatMapper seatMapper;
     private final TrainStationMapper trainStationMapper;
+    private final TrainStationPriceMapper trainStationPriceMapper;
     private final StringRedisTemplate stringRedisTemplate;
 
     /** 普通购票选座，委托至 selectAndLockSeats */
@@ -51,9 +53,9 @@ public class SeatSelector {
         );
     }
 
-    /** 抢票选座并锁定：按座位类型分组 → 分布式锁 → 查可用座位 → 锁定全部重叠区间 */
+    /** 抢票选座并锁定：按座位类型分组 → 计算位图掩码 → 分布式锁 → 位图查询可用座位 → CAS 原子锁定 */
     public List<TicketDTO> selectAndLockSeats(Long trainId, String startStation, String endStation,
-                                              List<OrderCreatePassengerDetailDTO> passengers) throws ServiceException {
+                                              List<OrderCreatePassengerDetailDTO> passengers) throws ServiceException, ClientException {
         List<String> passengerIds = passengers.stream()
                 .map(OrderCreatePassengerDetailDTO::getPassengerId).toList();
 
@@ -85,11 +87,19 @@ public class SeatSelector {
         Map<Integer, List<TicketDTO>> groupedBySeatType = ticketDTOList.stream()
                 .collect(Collectors.groupingBy(TicketDTO::getSeatType));
 
+        List<TrainStation> trainStations = trainStationMapper.selectList(
+                Wrappers.lambdaQuery(TrainStation.class)
+                        .eq(TrainStation::getTrainId, trainId)
+        );
+        long purchaseMask = StationCalculateUtil.bitmapMask(trainStations, startStation, endStation);
+
         String trainIdStr = String.valueOf(trainId);
         for (Map.Entry<Integer, List<TicketDTO>> entry : groupedBySeatType.entrySet()) {
             Integer seatType = entry.getKey();
             List<TicketDTO> sameTypeTickets = entry.getValue();
             int needCount = sameTypeTickets.size();
+
+            BigDecimal price = getPrice(trainId, startStation, endStation, seatType);
 
             String lockKey = RedisConstant.LOCK_KEY_PREFIX + "seat:" + trainIdStr + ":"
                     + startStation + ":" + endStation + ":" + seatType;
@@ -102,44 +112,30 @@ public class SeatSelector {
             try {
                 List<Seat> availableSeats = seatMapper.selectList(
                         Wrappers.lambdaQuery(Seat.class)
-                                .eq(Seat::getSeatType, seatType)
                                 .eq(Seat::getTrainId, trainId)
-                                .eq(Seat::getStartStation, startStation)
-                                .eq(Seat::getEndStation, endStation)
-                                .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
+                                .eq(Seat::getSeatType, seatType)
+                                .apply("(seat_bitmap & {0}) = 0", purchaseMask)
+                                .last("LIMIT " + needCount)
                 );
                 if (availableSeats.size() < needCount) {
                     throw new ClientException("余票不足");
                 }
-
-                List<TrainStation> trainStations = trainStationMapper.selectList(
-                        Wrappers.lambdaQuery(TrainStation.class)
-                                .eq(TrainStation::getTrainId, trainId)
-                );
-                List<RouteDTO> takeoutRoutes = StationCalculateUtil.takeoutStation(
-                        trainStations, startStation, endStation);
 
                 for (int i = 0; i < needCount; i++) {
                     Seat chosenSeat = availableSeats.get(i);
                     TicketDTO ticketDTO = sameTypeTickets.get(i);
 
                     ticketDTO.setSeatNumber(chosenSeat.getSeatNumber());
-                    ticketDTO.setAmount(chosenSeat.getPrice());
+                    ticketDTO.setAmount(price);
                     ticketDTO.setCarriageNumber(chosenSeat.getCarriageNumber());
 
-                    for (RouteDTO route : takeoutRoutes) {
-                        LambdaUpdateWrapper<Seat> wrapper = new LambdaUpdateWrapper<Seat>()
-                                .eq(Seat::getTrainId, trainId)
-                                .eq(Seat::getCarriageNumber, chosenSeat.getCarriageNumber())
-                                .eq(Seat::getSeatNumber, chosenSeat.getSeatNumber())
-                                .eq(Seat::getStartStation, route.getStartStation())
-                                .eq(Seat::getEndStation, route.getEndStation())
-                                .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
-                                .set(Seat::getSeatStatus, SeatStatusEnum.LOCKED.getCode());
-                        int updated = seatMapper.update(null, wrapper);
-                        if (updated == 0) {
-                            throw new ServiceException("座位已被抢占");
-                        }
+                    LambdaUpdateWrapper<Seat> lockWrapper = new LambdaUpdateWrapper<Seat>()
+                            .eq(Seat::getId, chosenSeat.getId())
+                            .apply("(seat_bitmap & {0}) = 0", purchaseMask)
+                            .setSql("seat_bitmap = seat_bitmap | " + purchaseMask);
+                    int updated = seatMapper.update(null, lockWrapper);
+                    if (updated == 0) {
+                        throw new ServiceException("座位已被抢占");
                     }
                 }
             } finally {
@@ -147,12 +143,8 @@ public class SeatSelector {
             }
         }
 
-        List<TrainStation> allStations = trainStationMapper.selectList(
-                Wrappers.lambdaQuery(TrainStation.class)
-                        .eq(TrainStation::getTrainId, trainId)
-        );
         List<RouteDTO> cacheInvalidateRoutes = StationCalculateUtil.takeoutStation(
-                allStations, startStation, endStation);
+                trainStations, startStation, endStation);
         for (RouteDTO route : cacheInvalidateRoutes) {
             String stockCacheKey = String.format(RedisConstant.TICKET_STOCKING_MAPPING,
                     trainIdStr, route.getStartStation(), route.getEndStation());
@@ -160,5 +152,16 @@ public class SeatSelector {
         }
 
         return ticketDTOList;
+    }
+
+    private BigDecimal getPrice(Long trainId, String startStation, String endStation, Integer seatType) {
+        TrainStationPrice priceRecord = trainStationPriceMapper.selectOne(
+                Wrappers.lambdaQuery(TrainStationPrice.class)
+                        .eq(TrainStationPrice::getTrainId, trainId)
+                        .eq(TrainStationPrice::getStartStation, startStation)
+                        .eq(TrainStationPrice::getEndStation, endStation)
+                        .eq(TrainStationPrice::getSeatType, seatType)
+        );
+        return priceRecord != null ? BigDecimal.valueOf(priceRecord.getPrice()) : BigDecimal.ZERO;
     }
 }

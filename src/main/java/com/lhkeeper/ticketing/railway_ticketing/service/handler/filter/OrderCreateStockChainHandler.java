@@ -6,10 +6,12 @@ import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderCreatePassengerDetailDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Seat;
-import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.entity.TrainStation;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
+import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
+import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -28,6 +30,7 @@ import java.util.stream.Collectors;
 public class OrderCreateStockChainHandler implements OrderCreateChainFilter<OrderCreateReqDTO> {
 
     private final SeatMapper seatMapper;
+    private final TrainStationMapper trainStationMapper;
     private final StringRedisTemplate stringRedisTemplate;
 
     @Override
@@ -60,12 +63,15 @@ public class OrderCreateStockChainHandler implements OrderCreateChainFilter<Orde
                 if (cachedJSON != null) {
                     availableSeats = JSON.parseArray(cachedJSON, Seat.class);
                 } else {
+                    List<TrainStation> stations = trainStationMapper.selectList(
+                            Wrappers.lambdaQuery(TrainStation.class)
+                                    .eq(TrainStation::getTrainId, trainId)
+                    );
+                    long queryMask = StationCalculateUtil.bitmapMask(stations, startStation, endStation);
                     availableSeats = seatMapper.selectList(
                             Wrappers.lambdaQuery(Seat.class)
                                     .eq(Seat::getTrainId, trainId)
-                                    .eq(Seat::getStartStation, startStation)
-                                    .eq(Seat::getEndStation, endStation)
-                                    .eq(Seat::getSeatStatus, SeatStatusEnum.AVAILABLE.getCode())
+                                    .apply("(seat_bitmap & {0}) = 0", queryMask)
                     );
                     stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(availableSeats),
                             RedisConstant.CACHE_TTL_SEAT_STOCK + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_SEAT_STOCK / 10),

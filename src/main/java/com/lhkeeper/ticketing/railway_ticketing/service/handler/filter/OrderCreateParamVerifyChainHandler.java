@@ -15,6 +15,7 @@ import java.util.List;
 
 /**
  * 校验参数是否有效
+ * TODO: 考虑缓存？
  */
 @Component
 @RequiredArgsConstructor
