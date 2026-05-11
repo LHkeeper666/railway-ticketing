@@ -11,6 +11,8 @@ import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLockFactory;
 import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -32,6 +34,7 @@ public class OrderCreateStockChainHandler implements OrderCreateChainFilter<Orde
     private final SeatMapper seatMapper;
     private final TrainStationMapper trainStationMapper;
     private final StringRedisTemplate stringRedisTemplate;
+    private final DistributedLockFactory lockFactory;
 
     @Override
     public void handler(OrderCreateReqDTO requestParam) {
@@ -51,10 +54,10 @@ public class OrderCreateStockChainHandler implements OrderCreateChainFilter<Orde
         if (cachedJSON != null) {
             availableSeats = JSON.parseArray(cachedJSON, Seat.class);
         } else {
-            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "stock:" + trainId + ":" + startStation + ":" + endStation;
-            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
-                    .setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
-            if (!lockAcquired) {
+            DistributedLock lock = lockFactory.tryLock(
+                    "stock:" + trainId + ":" + startStation + ":" + endStation,
+                    RedisConstant.LOCK_TTL_SECONDS);
+            if (lock == null) {
                 throw new ServiceException("系统正忙，请稍后重试");
             }
             try {
@@ -78,7 +81,7 @@ public class OrderCreateStockChainHandler implements OrderCreateChainFilter<Orde
                             TimeUnit.SECONDS);
                 }
             } finally {
-                stringRedisTemplate.delete(lockKey);
+                lock.unlock();
             }
         }
 

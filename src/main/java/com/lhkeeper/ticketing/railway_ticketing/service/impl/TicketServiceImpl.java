@@ -25,6 +25,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLockFactory;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -44,6 +46,7 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
     private final TrainStationPriceMapper trainStationPriceMapper;
     private final AbstractChainContext<TicketPageQueryReqDTO> ticketPageQueryContext;
     private final StringRedisTemplate stringRedisTemplate;
+    private final DistributedLockFactory lockFactory;
 
     /**
      * 分页查询余票：缓存读取区域映射 → 查车次关系 → 查列车信息 → 查座位库存 → 组装返回
@@ -89,16 +92,15 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                     trainStationRelation -> String.format(RedisConstant.TRAINID_TO_STATION_RELATION_MAPPING, trainStationRelation.getTrainId()),
                     JSON::toJSONString
             ));
-            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "station_relation";
-            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
-            if (!lockAcquired) {
+            DistributedLock lock = lockFactory.tryLock("station_relation", RedisConstant.LOCK_TTL_SECONDS);
+            if (lock == null) {
                 throw new ServiceException("系统正忙，请稍后重试");
             }
             try {
                 stringRedisTemplate.opsForHash().putAll(buildTrainStationRelationHashKey, trainStationRelationMap);
                 stringRedisTemplate.expire(buildTrainStationRelationHashKey, RedisConstant.CACHE_TTL_STATION_RELATION, TimeUnit.SECONDS);
             } finally {
-                stringRedisTemplate.delete(lockKey);
+                lock.unlock();
             }
         }
         trainStationRelations = (trainStationRelations == null)?
@@ -149,10 +151,8 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
         Set<Long> missingTrainIds = new HashSet<>(trainIds);
         cachedTrainIds.forEach(missingTrainIds::remove);
         if (!missingTrainIds.isEmpty()) {
-            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "train_batch";
-            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
-                    .setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
-            if (!lockAcquired) {
+            DistributedLock lock = lockFactory.tryLock("train_batch", RedisConstant.LOCK_TTL_SECONDS);
+            if (lock == null) {
                 throw new ServiceException("系统正忙，请稍后重试");
             }
             try {
@@ -176,7 +176,7 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                                 RedisConstant.CACHE_TTL_NULL,
                                 TimeUnit.SECONDS));
             } finally {
-                stringRedisTemplate.delete(lockKey);
+                lock.unlock();
             }
         }
 
@@ -218,9 +218,10 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                 // 为各座位类型设置正确的区间价格
                 setSeatPrices(seats, each.getTrainId(), each.getStartStation(), each.getEndStation());
 
-                String lockKey = RedisConstant.LOCK_KEY_PREFIX + "seat:" + each.getTrainId() + ":" + each.getStartStation() + ":" + each.getEndStation();
-                boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
-                if (!lockAcquired) {
+                DistributedLock lock = lockFactory.tryLock(
+                        "seat:" + each.getTrainId() + ":" + each.getStartStation() + ":" + each.getEndStation(),
+                        RedisConstant.LOCK_TTL_SECONDS);
+                if (lock == null) {
                     throw new ServiceException("系统正忙，请稍后重试");
                 }
                 try {
@@ -228,7 +229,7 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                             RedisConstant.CACHE_TTL_SEAT_STOCK + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_SEAT_STOCK / 10),
                             TimeUnit.SECONDS);
                 } finally {
-                    stringRedisTemplate.delete(lockKey);
+                    lock.unlock();
                 }
             } else {
                 seats = JSON.parseArray(cachedString, Seat.class);

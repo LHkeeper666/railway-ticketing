@@ -1,11 +1,13 @@
 package com.lhkeeper.ticketing.railway_ticketing.service.task;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
+
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.OrderMapper;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLockFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -14,7 +16,6 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 兜底清理超时 PENDING 订单，防止消息丢失导致订单永久挂起
@@ -27,15 +28,16 @@ public class PendingOrderCleanupTask {
     private final OrderMapper orderMapper;
     private final OrderService orderService;
     private final StringRedisTemplate stringRedisTemplate;
+    private final DistributedLockFactory lockFactory;
 
-    private static final String LOCK_KEY = RedisConstant.LOCK_KEY_PREFIX + "pending-cleanup";
-    private static final long LOCK_TTL = 60;
     private static final int BATCH_SIZE = 100;
     private static final int TIMEOUT_MINUTES = 15;
+    private static final long LOCK_TTL = 60;
 
     @Scheduled(fixedDelay = 60_000)
     public void cleanup() {
-        if (!acquireLock()) return;
+        DistributedLock lock = lockFactory.tryLock("pending-cleanup", LOCK_TTL);
+        if (lock == null) return;
         try {
             int total = 0;
             while (true) {
@@ -52,7 +54,7 @@ public class PendingOrderCleanupTask {
             }
             if (total > 0) log.info("兜底清理完成, count={}", total);
         } finally {
-            releaseLock();
+            lock.unlock();
         }
     }
 
@@ -66,13 +68,4 @@ public class PendingOrderCleanupTask {
         );
     }
 
-    private boolean acquireLock() {
-        return Boolean.TRUE.equals(
-                stringRedisTemplate.opsForValue()
-                        .setIfAbsent(LOCK_KEY, "1", LOCK_TTL, TimeUnit.SECONDS));
-    }
-
-    private void releaseLock() {
-        stringRedisTemplate.delete(LOCK_KEY);
-    }
 }

@@ -28,6 +28,8 @@ import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.select.SeatSelector;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLockFactory;
 import com.lhkeeper.ticketing.railway_ticketing.util.SnowflakeUtil;
 import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
@@ -73,6 +75,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final SeatMapper seatMapper;
     private final SnowflakeUtil snowflakeUtil;
     private final StringRedisTemplate stringRedisTemplate;
+    private final DistributedLockFactory lockFactory;
     private final RabbitTemplate rabbitTemplate;
     private final TicketServiceImpl ticketServiceImpl;
     private final OrderItemServiceImpl orderItemServiceImpl;
@@ -323,10 +326,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             }
             return JSON.parseObject(trainJSON, Train.class);
         }
-        String lockKey = RedisConstant.LOCK_KEY_PREFIX + "train:" + trainId;
-        boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
-                .setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
-        if (!lockAcquired) {
+        DistributedLock lock = lockFactory.tryLock("train:" + trainId, RedisConstant.LOCK_TTL_SECONDS);
+        if (lock == null) {
             throw new ServiceException("系统正忙，请稍后重试");
         }
         try {
@@ -348,7 +349,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                     TimeUnit.SECONDS);
             return train;
         } finally {
-            stringRedisTemplate.delete(lockKey);
+            lock.unlock();
         }
     }
 

@@ -17,6 +17,8 @@ import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationPriceMapper;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLockFactory;
 import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -26,7 +28,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
+
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -42,6 +44,7 @@ public class SeatSelector {
     private final TrainStationMapper trainStationMapper;
     private final TrainStationPriceMapper trainStationPriceMapper;
     private final StringRedisTemplate stringRedisTemplate;
+    private final DistributedLockFactory lockFactory;
 
     /** 普通购票选座，委托至 selectAndLockSeats */
     public List<TicketDTO> selectSeats(OrderCreateReqDTO orderCreateReqDTO) throws ServiceException {
@@ -101,12 +104,10 @@ public class SeatSelector {
 
             BigDecimal price = getPrice(trainId, startStation, endStation, seatType);
 
-            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "seat:" + trainIdStr + ":"
-                    + startStation + ":" + endStation + ":" + seatType;
-            boolean acquired = Boolean.TRUE.equals(
-                    stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS)
-            );
-            if (!acquired) {
+            DistributedLock lock = lockFactory.tryLock(
+                    "seat:" + trainIdStr + ":" + startStation + ":" + endStation + ":" + seatType,
+                    RedisConstant.LOCK_TTL_SECONDS);
+            if (lock == null) {
                 throw new ServiceException("系统正忙，请稍后重试");
             }
             try {
@@ -139,7 +140,7 @@ public class SeatSelector {
                     }
                 }
             } finally {
-                stringRedisTemplate.delete(lockKey);
+                lock.unlock();
             }
         }
 

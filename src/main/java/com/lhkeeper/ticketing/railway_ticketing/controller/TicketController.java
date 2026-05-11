@@ -36,7 +36,7 @@ public class TicketController {
     /**
      * 余票分页查询，基于令牌桶限流
      */
-    @RateLimit(key = "ticket:query", capacity = 100, refillRate = 50.0)
+    @RateLimit(key = "ticket:query", capacity = 1000, refillRate = 500.0)
     @GetMapping("/query")
     public Result<TicketPageQueryRespDTO> ticketQuery(TicketPageQueryReqDTO ticketPageQueryReqDTO) {
         return Result.success(ticketService.queryTicketByPage(ticketPageQueryReqDTO));

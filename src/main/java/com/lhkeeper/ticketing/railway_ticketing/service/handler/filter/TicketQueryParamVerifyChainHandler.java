@@ -8,13 +8,14 @@ import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.RegionMapper;
 import com.lhkeeper.ticketing.railway_ticketing.util.DateUtil;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
+import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLockFactory;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 余票查询参数有效性校验：Region 存在性、日期合法性（order 5）
@@ -25,29 +26,28 @@ public class TicketQueryParamVerifyChainHandler implements TicketQueryChainFilte
 
     private final RegionMapper regionMapper;
     private final StringRedisTemplate stringRedisTemplate;
+    private final DistributedLockFactory lockFactory;
 
     @Override
     public void handler(TicketPageQueryReqDTO requestParam) {
 
         if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
-            String lockKey = RedisConstant.LOCK_KEY_PREFIX + "region";
-            boolean lockAcquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
-                    .setIfAbsent(lockKey, "locked", RedisConstant.LOCK_TTL_SECONDS, TimeUnit.SECONDS));
-            if (!lockAcquired) {
+            DistributedLock lock = lockFactory.tryLock("region", RedisConstant.LOCK_TTL_SECONDS);
+            if (lock == null) {
                 throw new ServiceException("系统正忙，请稍后重试");
             }
-            // 双重检查
-            if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
-                try {
+            try {
+                // 双重检查
+                if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
                     List<Region> regions = regionMapper.selectList(Wrappers.emptyWrapper());
                     for (Region region : regions) {
                         String key = String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, region.getCode());
                         stringRedisTemplate.opsForValue().set(key, region.getName());
                     }
                     stringRedisTemplate.opsForValue().set(RedisConstant.REGION_LOADED_FLAG, "1");
-                } finally {
-                    stringRedisTemplate.delete(lockKey);
                 }
+            } finally {
+                lock.unlock();
             }
         }
         String startRegionName = stringRedisTemplate.opsForValue().get(
