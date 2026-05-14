@@ -47,7 +47,7 @@ public class OrderTimeoutCancelConsumer {
                 channel.basicAck(deliveryTag, false);
                 return;
             }
-            orderService.cancelOrder(orderSn);
+            orderService.cancelOrder(orderSn, true);
             channel.basicAck(deliveryTag, false);
             log.info("超时取消订单成功, orderSn={}", orderSn);
         } catch (Exception e) {

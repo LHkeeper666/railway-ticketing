@@ -35,4 +35,7 @@ public interface OrderService extends IService<Order> {
 
     /** 取消订单，恢复座位库存并失效缓存 */
     void cancelOrder(String orderSn);
+
+    /** 取消订单，timeoutCancel=true 表示超时取消（仅允许 UNPAID 订单），false 为手动取消 */
+    void cancelOrder(String orderSn, boolean timeoutCancel);
 }

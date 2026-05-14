@@ -45,7 +45,7 @@ public class PendingOrderCleanupTask {
                 if (orders.isEmpty()) break;
                 for (Order order : orders) {
                     try {
-                        orderService.cancelOrder(order.getOrderSn());
+                        orderService.cancelOrder(order.getOrderSn(), true);
                         total++;
                     } catch (Exception e) {
                         log.error("兜底取消失败, orderSn={}", order.getOrderSn(), e);

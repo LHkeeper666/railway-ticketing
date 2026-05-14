@@ -532,17 +532,28 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     }
 
     /**
-     * 取消订单：责任链校验 → 幂等检查 → 释放全部重叠区间座位 → 更新状态 → 失效缓存
+     * 取消订单（手动取消，允许退票 PAID 订单）
      */
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public void cancelOrder(String orderSn) {
+        cancelOrder(orderSn, false);
+    }
+
+    /**
+     * 取消订单：责任链校验 → FOR UPDATE 加锁 → 超时取消守卫 → 释放座位 → 更新状态 → 失效缓存
+     * @param timeoutCancel true=超时取消（仅允许 UNPAID），false=手动取消（允许退票 PAID）
+     */
+    @Transactional(rollbackFor = Throwable.class)
+    @Override
+    public void cancelOrder(String orderSn, boolean timeoutCancel) {
         orderCancelChainContext.handler(ChainMarkEnum.ORDER_CANCEL.name(), orderSn);
 
-        log.info("开始取消订单, orderSn={}", orderSn);
+        log.info("开始取消订单, orderSn={}, timeoutCancel={}", orderSn, timeoutCancel);
         Order order = orderMapper.selectOne(
                 Wrappers.lambdaQuery(Order.class)
                         .eq(Order::getOrderSn, orderSn)
+                        .last("FOR UPDATE")
         );
         if (order == null) {
             log.warn("取消订单-订单不存在, orderSn={}", orderSn);
@@ -550,7 +561,14 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
         if (OrderStatusEnum.CANCELED.getCode().equals(order.getStatus())) {
             log.warn("取消订单-订单已取消, orderSn={}", orderSn);
+            if (timeoutCancel) {
+                return;
+            }
             throw new ClientException("订单已取消");
+        }
+        if (timeoutCancel && !OrderStatusEnum.UNPAID.getCode().equals(order.getStatus())) {
+            log.info("超时取消-订单状态已变更，跳过, orderSn={}, status={}", orderSn, order.getStatus());
+            return;
         }
 
         boolean wasPaid = OrderStatusEnum.PAID.getCode().equals(order.getStatus());
