@@ -17,8 +17,6 @@ import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationPriceMapper;
-import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
-import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLockFactory;
 import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -44,7 +42,6 @@ public class SeatSelector {
     private final TrainStationMapper trainStationMapper;
     private final TrainStationPriceMapper trainStationPriceMapper;
     private final StringRedisTemplate stringRedisTemplate;
-    private final DistributedLockFactory lockFactory;
 
     /** 普通购票选座，委托至 selectAndLockSeats */
     public List<TicketDTO> selectSeats(OrderCreateReqDTO orderCreateReqDTO) throws ServiceException {
@@ -56,7 +53,7 @@ public class SeatSelector {
         );
     }
 
-    /** 抢票选座并锁定：按座位类型分组 → 计算位图掩码 → 分布式锁 → 位图查询可用座位 → CAS 原子锁定 */
+    /** 抢票选座并锁定：按座位类型分组 → 计算位图掩码 → 位图查询可用座位 → CAS 原子锁定（冲突重试） */
     public List<TicketDTO> selectAndLockSeats(Long trainId, String startStation, String endStation,
                                               List<OrderCreatePassengerDetailDTO> passengers) throws ServiceException, ClientException {
         List<String> passengerIds = passengers.stream()
@@ -104,43 +101,40 @@ public class SeatSelector {
 
             BigDecimal price = getPrice(trainId, startStation, endStation, seatType);
 
-            DistributedLock lock = lockFactory.tryLock(
-                    "seat:" + trainIdStr + ":" + startStation + ":" + endStation + ":" + seatType,
-                    RedisConstant.LOCK_TTL_SECONDS);
-            if (lock == null) {
-                throw new ServiceException("系统正忙，请稍后重试");
-            }
-            try {
-                List<Seat> availableSeats = seatMapper.selectList(
-                        Wrappers.lambdaQuery(Seat.class)
-                                .eq(Seat::getTrainId, trainId)
-                                .eq(Seat::getSeatType, seatType)
-                                .apply("(seat_bitmap & {0}) = 0", purchaseMask)
-                                .last("LIMIT " + needCount)
-                );
-                if (availableSeats.size() < needCount) {
-                    throw new ClientException("余票不足");
-                }
-
-                for (int i = 0; i < needCount; i++) {
-                    Seat chosenSeat = availableSeats.get(i);
-                    TicketDTO ticketDTO = sameTypeTickets.get(i);
-
-                    ticketDTO.setSeatNumber(chosenSeat.getSeatNumber());
-                    ticketDTO.setAmount(price);
-                    ticketDTO.setCarriageNumber(chosenSeat.getCarriageNumber());
-
-                    LambdaUpdateWrapper<Seat> lockWrapper = new LambdaUpdateWrapper<Seat>()
-                            .eq(Seat::getId, chosenSeat.getId())
+            List<Seat> availableSeats = seatMapper.selectList(
+                    Wrappers.lambdaQuery(Seat.class)
+                            .eq(Seat::getTrainId, trainId)
+                            .eq(Seat::getSeatType, seatType)
                             .apply("(seat_bitmap & {0}) = 0", purchaseMask)
-                            .setSql("seat_bitmap = seat_bitmap | " + purchaseMask);
-                    int updated = seatMapper.update(null, lockWrapper);
-                    if (updated == 0) {
-                        throw new ServiceException("座位已被抢占");
-                    }
+                            .last("LIMIT " + (needCount * 3))
+            );
+            if (availableSeats.size() < needCount) {
+                throw new ClientException("余票不足");
+            }
+
+            int acquired = 0;
+            for (Seat chosenSeat : availableSeats) {
+                LambdaUpdateWrapper<Seat> lockWrapper = new LambdaUpdateWrapper<Seat>()
+                        .eq(Seat::getId, chosenSeat.getId())
+                        .apply("(seat_bitmap & {0}) = 0", purchaseMask)
+                        .setSql("seat_bitmap = seat_bitmap | " + purchaseMask);
+                int updated = seatMapper.update(null, lockWrapper);
+                if (updated == 0) {
+                    continue;
                 }
-            } finally {
-                lock.unlock();
+
+                TicketDTO ticketDTO = sameTypeTickets.get(acquired);
+                ticketDTO.setSeatNumber(chosenSeat.getSeatNumber());
+                ticketDTO.setAmount(price);
+                ticketDTO.setCarriageNumber(chosenSeat.getCarriageNumber());
+
+                acquired++;
+                if (acquired == needCount) {
+                    break;
+                }
+            }
+            if (acquired < needCount) {
+                throw new ClientException("余票不足");
             }
         }
 
