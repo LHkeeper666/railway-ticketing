@@ -12,7 +12,7 @@ public final class StationCalculateUtil {
     private StationCalculateUtil() {}
 
     /**
-     * 计算与购买区间重叠的全部区间（用于锁定/释放座位）
+     * 计算与购买区间重叠的全部区间（用于使缓存失效）
      *
      * @param stations   列车区间列表（按 sequence 升序）
      * @param departure  出发站

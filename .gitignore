@@ -42,3 +42,7 @@ docker-env/mysql/logs/
 # MySQL 临时文件
 *.pid
 *.err
+
+scripts/
+
+*.log
