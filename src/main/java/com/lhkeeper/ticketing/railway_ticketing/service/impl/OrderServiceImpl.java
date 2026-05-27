@@ -399,7 +399,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     }
 
     /**
-     * 处理支付回调：责任链校验 → 幂等检查 → 更新 Order/OrderItem/Ticket/Pay 状态
+     * 处理支付回调：责任链校验 → CAS 原子状态转换 → 更新 OrderItem/Ticket/Pay。
+     * 用 CAS（UPDATE WHERE status=UNPAID）替代 FOR UPDATE，与 cancelOrder 互斥。
      */
     @Transactional(rollbackFor = Throwable.class)
     @Override
@@ -408,45 +409,74 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         log.info("收到支付回调, orderSn={}, status={}, tradeNo={}",
                 reqDTO.getOrderSn(), reqDTO.getStatus(), reqDTO.getTradeNo());
-        Order order = orderMapper.selectOne(
-                Wrappers.lambdaQuery(Order.class)
-                        .eq(Order::getOrderSn, reqDTO.getOrderSn())
-        );
-        if (order == null) {
-            log.warn("支付回调-订单不存在, orderSn={}", reqDTO.getOrderSn());
-            throw new ClientException("订单不存在");
-        }
-        if (OrderStatusEnum.CANCELED.getCode().equals(order.getStatus())) {
-            log.warn("支付回调-订单已取消, orderSn={}", reqDTO.getOrderSn());
-            throw new ClientException("订单已取消");
-        }
 
+        String orderSn = reqDTO.getOrderSn();
         boolean success = "SUCCESS".equalsIgnoreCase(reqDTO.getStatus());
 
-        if (success) {
-            if (OrderStatusEnum.PAID.getCode().equals(order.getStatus())) {
-                return;
-            }
-            order.setStatus(OrderStatusEnum.PAID.getCode());
-            order.setPayTime(LocalDateTime.now());
-            orderMapper.updateById(order);
-
-            orderItemMapper.update(null,
-                    Wrappers.lambdaUpdate(OrderItem.class)
-                            .eq(OrderItem::getOrderSn, reqDTO.getOrderSn())
-                            .set(OrderItem::getStatus, TicketStatusEnum.PAID.getCode())
-            );
-
-            ticketMapper.update(null,
-                    Wrappers.lambdaUpdate(Ticket.class)
-                            .eq(Ticket::getOrderSn, reqDTO.getOrderSn())
-                            .set(Ticket::getTicketStatus, TicketStatusEnum.PAID.getCode())
-            );
-            log.info("支付成功, orderSn={}", reqDTO.getOrderSn());
-        } else {
-            log.warn("支付失败, orderSn={}", reqDTO.getOrderSn());
+        if (!success) {
+            // 支付失败：直接记录 Pay，不争抢状态
+            saveOrUpdatePay(reqDTO, "FAIL");
+            log.warn("支付失败, orderSn={}", orderSn);
+            return;
         }
 
+        // CAS: UNPAID → PAID
+        int updated = orderMapper.update(null,
+                Wrappers.lambdaUpdate(Order.class)
+                        .eq(Order::getOrderSn, orderSn)
+                        .eq(Order::getStatus, OrderStatusEnum.UNPAID.getCode())
+                        .set(Order::getStatus, OrderStatusEnum.PAID.getCode())
+                        .set(Order::getPayTime, LocalDateTime.now())
+        );
+
+        if (updated > 0) {
+            // CAS 成功 → 更新 OrderItem/Ticket/Pay
+            orderItemMapper.update(null,
+                    Wrappers.lambdaUpdate(OrderItem.class)
+                            .eq(OrderItem::getOrderSn, orderSn)
+                            .set(OrderItem::getStatus, TicketStatusEnum.PAID.getCode())
+            );
+            ticketMapper.update(null,
+                    Wrappers.lambdaUpdate(Ticket.class)
+                            .eq(Ticket::getOrderSn, orderSn)
+                            .set(Ticket::getTicketStatus, TicketStatusEnum.PAID.getCode())
+            );
+            saveOrUpdatePay(reqDTO, "SUCCESS");
+            log.info("支付成功, orderSn={}", orderSn);
+            return;
+        }
+
+        // CAS 失败 → 重新读取当前状态
+        Order order = orderMapper.selectOne(
+                Wrappers.lambdaQuery(Order.class)
+                        .eq(Order::getOrderSn, orderSn)
+        );
+        if (order == null) {
+            log.warn("支付回调-订单不存在, orderSn={}", orderSn);
+            throw new ClientException("订单不存在");
+        }
+
+        Integer currentStatus = order.getStatus();
+        if (OrderStatusEnum.PAID.getCode().equals(currentStatus)) {
+            // 已是 PAID → 幂等，补充更新 Pay 记录
+            log.info("支付回调-订单已支付（幂等）, orderSn={}", orderSn);
+            saveOrUpdatePay(reqDTO, "SUCCESS");
+            return;
+        }
+
+        if (OrderStatusEnum.CANCELED.getCode().equals(currentStatus)) {
+            // 订单已被取消，但用户已付款 → 记录退款
+            log.warn("支付回调-订单已取消，记录待退款, orderSn={}", orderSn);
+            saveOrUpdatePay(reqDTO, "PENDING_REFUND");
+            return;
+        }
+
+        // 其他意外状态
+        log.warn("支付回调-订单状态异常, orderSn={}, status={}", orderSn, currentStatus);
+        throw new ClientException("订单状态异常");
+    }
+
+    private void saveOrUpdatePay(PayCallbackReqDTO reqDTO, String status) {
         Pay pay = payMapper.selectOne(
                 Wrappers.lambdaQuery(Pay.class)
                         .eq(Pay::getOrderSn, reqDTO.getOrderSn())
@@ -454,12 +484,23 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         if (pay != null) {
             pay.setTradeNo(reqDTO.getTradeNo());
             pay.setChannel(reqDTO.getChannel());
-            pay.setStatus(success ? "SUCCESS" : "FAIL");
-            pay.setGmtPayment(success ? LocalDateTime.now() : null);
+            pay.setStatus(status);
+            pay.setGmtPayment("SUCCESS".equals(status) ? LocalDateTime.now() : pay.getGmtPayment());
             if (reqDTO.getTotalAmount() != null) {
                 pay.setTotalAmount(reqDTO.getTotalAmount());
             }
             payMapper.updateById(pay);
+        } else {
+            Pay newPay = Pay.builder()
+                    .paySn(String.valueOf(snowflakeUtil.generateId()))
+                    .orderSn(reqDTO.getOrderSn())
+                    .tradeNo(reqDTO.getTradeNo())
+                    .channel(reqDTO.getChannel())
+                    .totalAmount(reqDTO.getTotalAmount())
+                    .status(status)
+                    .gmtPayment("SUCCESS".equals(status) ? LocalDateTime.now() : null)
+                    .build();
+            payMapper.insert(newPay);
         }
     }
 
@@ -541,8 +582,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     }
 
     /**
-     * 取消订单：责任链校验 → FOR UPDATE 加锁 → 超时取消守卫 → 释放座位 → 更新状态 → 失效缓存
-     * @param timeoutCancel true=超时取消（仅允许 UNPAID），false=手动取消（允许退票 PAID）
+     * 取消订单：CAS 原子状态转换 → 释放座位 → 更新状态 → 失效缓存。
+     * 用 UPDATE WHERE status=? 替代 FOR UPDATE，只有一个操作能抢到状态转换权。
+     * @param timeoutCancel true=超时取消，false=手动取消（允许退票 PAID 订单）
      */
     @Transactional(rollbackFor = Throwable.class)
     @Override
@@ -550,29 +592,75 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         orderCancelChainContext.handler(ChainMarkEnum.ORDER_CANCEL.name(), orderSn);
 
         log.info("开始取消订单, orderSn={}, timeoutCancel={}", orderSn, timeoutCancel);
+
+        // 快照读（trainId/station 不可变，无需加锁）
         Order order = orderMapper.selectOne(
                 Wrappers.lambdaQuery(Order.class)
                         .eq(Order::getOrderSn, orderSn)
-                        .last("FOR UPDATE")
         );
         if (order == null) {
             log.warn("取消订单-订单不存在, orderSn={}", orderSn);
             throw new ClientException("订单不存在");
         }
-        if (OrderStatusEnum.CANCELED.getCode().equals(order.getStatus())) {
+
+        Integer currentStatus = order.getStatus();
+
+        // 已取消 → 幂等
+        if (OrderStatusEnum.CANCELED.getCode().equals(currentStatus)) {
             log.warn("取消订单-订单已取消, orderSn={}", orderSn);
             if (timeoutCancel) {
                 return;
             }
             throw new ClientException("订单已取消");
         }
-        if (timeoutCancel && !OrderStatusEnum.UNPAID.getCode().equals(order.getStatus())) {
-            log.info("超时取消-订单状态已变更，跳过, orderSn={}, status={}", orderSn, order.getStatus());
+
+        // 超时取消 PAID → 支付已先生效，跳过
+        if (timeoutCancel && OrderStatusEnum.PAID.getCode().equals(currentStatus)) {
+            log.info("超时取消-订单已支付，跳过, orderSn={}", orderSn);
             return;
         }
 
-        boolean wasPaid = OrderStatusEnum.PAID.getCode().equals(order.getStatus());
+        // 手动取消时状态校验
+        if (!timeoutCancel
+                && !OrderStatusEnum.UNPAID.getCode().equals(currentStatus)
+                && !OrderStatusEnum.PAID.getCode().equals(currentStatus)) {
+            throw new ClientException("订单状态不允许取消");
+        }
 
+        // CAS 1: PENDING → CANCELED（快速路径，无座位/Item/Ticket）
+        if (OrderStatusEnum.PENDING.getCode().equals(currentStatus)) {
+            int updated = orderMapper.update(null,
+                    Wrappers.lambdaUpdate(Order.class)
+                            .eq(Order::getOrderSn, orderSn)
+                            .eq(Order::getStatus, OrderStatusEnum.PENDING.getCode())
+                            .set(Order::getStatus, OrderStatusEnum.CANCELED.getCode())
+            );
+            if (updated > 0) {
+                log.info("超时取消-PENDING订单快速路径, orderSn={}", orderSn);
+                return;
+            }
+            // CAS 失败，重新读取最新状态后递归重试一次
+            log.info("PENDING CAS 失败，重试, orderSn={}", orderSn);
+            cancelOrder(orderSn, timeoutCancel);
+            return;
+        }
+
+        // CAS 2: UNPAID/PAID → CANCELED
+        boolean wasPaid = OrderStatusEnum.PAID.getCode().equals(currentStatus);
+        int updated = orderMapper.update(null,
+                Wrappers.lambdaUpdate(Order.class)
+                        .eq(Order::getOrderSn, orderSn)
+                        .eq(Order::getStatus, currentStatus)
+                        .set(Order::getStatus, OrderStatusEnum.CANCELED.getCode())
+        );
+        if (updated == 0) {
+            // CAS 失败，重新读取最新状态后递归重试一次
+            log.info("取消订单 CAS 失败，重试, orderSn={}, wasStatus={}", orderSn, currentStatus);
+            cancelOrder(orderSn, timeoutCancel);
+            return;
+        }
+
+        // CAS 成功 → 执行副作用
         // 计算购买区间的位图掩码
         List<TrainStation> trainStations = trainStationMapper.selectList(
                 Wrappers.lambdaQuery(TrainStation.class)
@@ -596,10 +684,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                             .setSql("seat_bitmap = seat_bitmap & ~" + purchaseMask)
             );
         }
-
-        // 更新订单状态
-        order.setStatus(OrderStatusEnum.CANCELED.getCode());
-        orderMapper.updateById(order);
 
         // 更新订单项和车票状态
         Integer itemStatus = wasPaid ? TicketStatusEnum.REFUNDED.getCode() : TicketStatusEnum.CLOSED.getCode();

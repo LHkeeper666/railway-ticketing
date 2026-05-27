@@ -1,10 +1,6 @@
 package com.lhkeeper.ticketing.railway_ticketing.service.handler.mq;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lhkeeper.ticketing.railway_ticketing.config.RabbitMQConfig;
-import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
-import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
-import com.lhkeeper.ticketing.railway_ticketing.mapper.OrderMapper;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
 import com.rabbitmq.client.Channel;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +13,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 
 /**
- * 订单超时取消消费者，消费延迟队列中的超时订单并执行取消
+ * 订单超时取消消费者，直接委托 cancelOrder（内部 CAS 保证原子性）
  */
 @Slf4j
 @Component
@@ -25,28 +21,12 @@ import java.io.IOException;
 public class OrderTimeoutCancelConsumer {
 
     private final OrderService orderService;
-    private final OrderMapper orderMapper;
 
     @RabbitListener(queues = RabbitMQConfig.ORDER_TIMEOUT_CANCEL_QUEUE)
     public void onMessage(String orderSn, Channel channel,
                           @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         log.info("收到订单超时取消消息, orderSn={}", orderSn);
         try {
-            Order order = orderMapper.selectOne(
-                    Wrappers.lambdaQuery(Order.class)
-                            .eq(Order::getOrderSn, orderSn)
-            );
-            if (order == null) {
-                log.warn("超时取消-订单不存在, orderSn={}", orderSn);
-                channel.basicAck(deliveryTag, false);
-                return;
-            }
-            if (!OrderStatusEnum.UNPAID.getCode().equals(order.getStatus())) {
-                log.info("订单已处理，跳过超时取消, orderSn={}, status={}",
-                        orderSn, order.getStatus());
-                channel.basicAck(deliveryTag, false);
-                return;
-            }
             orderService.cancelOrder(orderSn, true);
             channel.basicAck(deliveryTag, false);
             log.info("超时取消订单成功, orderSn={}", orderSn);
