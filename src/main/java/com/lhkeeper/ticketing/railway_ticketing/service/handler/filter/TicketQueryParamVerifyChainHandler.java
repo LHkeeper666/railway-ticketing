@@ -16,6 +16,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 余票查询参数有效性校验：Region 存在性、日期合法性（order 5）
@@ -33,21 +35,39 @@ public class TicketQueryParamVerifyChainHandler implements TicketQueryChainFilte
 
         if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
             DistributedLock lock = lockFactory.tryLock("region", RedisConstant.LOCK_TTL_SECONDS);
-            if (lock == null) {
+            // 自旋重试，等待持锁者加载完成（Redis 重启后避免大面积 500）
+            for (int retry = 0; lock == null && retry < 10; retry++) {
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new ServiceException("系统繁忙，请稍后重试");
+                }
+                if (Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
+                    break;
+                }
+                lock = lockFactory.tryLock("region", RedisConstant.LOCK_TTL_SECONDS);
+            }
+            if (lock == null && !Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
                 throw new ServiceException("系统正忙，请稍后重试");
             }
-            try {
-                // 双重检查
-                if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
-                    List<Region> regions = regionMapper.selectList(Wrappers.emptyWrapper());
-                    for (Region region : regions) {
-                        String key = String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, region.getCode());
-                        stringRedisTemplate.opsForValue().set(key, region.getName());
+            if (lock != null) {
+                try {
+                    // 双重检查
+                    if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(RedisConstant.REGION_LOADED_FLAG))) {
+                        List<Region> regions = regionMapper.selectList(Wrappers.emptyWrapper());
+                        for (Region region : regions) {
+                            String key = String.format(RedisConstant.REGION_CODE_TO_REGION_NAME_MAPPING, region.getCode());
+                            long ttl = RedisConstant.CACHE_TTL_REGION
+                                    + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_REGION / 10);
+                            stringRedisTemplate.opsForValue().set(key, region.getName(), ttl, TimeUnit.SECONDS);
+                        }
+                        stringRedisTemplate.opsForValue().set(RedisConstant.REGION_LOADED_FLAG, "1",
+                                RedisConstant.CACHE_TTL_REGION, TimeUnit.SECONDS);
                     }
-                    stringRedisTemplate.opsForValue().set(RedisConstant.REGION_LOADED_FLAG, "1");
+                } finally {
+                    lock.unlock();
                 }
-            } finally {
-                lock.unlock();
             }
         }
         String startRegionName = stringRedisTemplate.opsForValue().get(
