@@ -1,4 +1,4 @@
-package com.lhkeeper.ticketing.railway_ticketing.service.handler.task;
+package com.lhkeeper.ticketing.railway_ticketing.service.task;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
