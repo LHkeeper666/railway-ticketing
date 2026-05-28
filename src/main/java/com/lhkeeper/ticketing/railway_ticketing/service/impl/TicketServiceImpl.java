@@ -9,7 +9,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.TicketPageQueryR
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
-import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
+import com.lhkeeper.ticketing.railway_ticketing.service.TrainStationService;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationPriceMapper;
 import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
@@ -42,7 +42,7 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
     private final SeatMapper seatMapper;
     private final RegionMapper regionMapper;
     private final TrainStationRelationMapper trainStationRelationMapper;
-    private final TrainStationMapper trainStationMapper;
+    private final TrainStationService trainStationService;
     private final TrainStationPriceMapper trainStationPriceMapper;
     private final AbstractChainContext<TicketPageQueryReqDTO> ticketPageQueryContext;
     private final StringRedisTemplate stringRedisTemplate;
@@ -194,11 +194,7 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
         Set<Long> trainIdsForStations = trainServices.stream().map(TrainServiceDTO::getTrainId).collect(Collectors.toSet());
         Map<Long, List<TrainStation>> trainStationMap = new HashMap<>();
         for (Long tid : trainIdsForStations) {
-            List<TrainStation> stations = trainStationMapper.selectList(
-                    Wrappers.lambdaQuery(TrainStation.class)
-                            .eq(TrainStation::getTrainId, tid)
-            );
-            trainStationMap.put(tid, stations);
+            trainStationMap.put(tid, trainStationService.getTrainStationsByTrainId(tid));
         }
 
         // 获取 seat_class_list
@@ -206,17 +202,25 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
             String key = String.format(RedisConstant.TICKET_STOCKING_MAPPING, each.getTrainId(), each.getStartStation(), each.getEndStation());
 
             String cachedString = stringRedisTemplate.opsForValue().get(key);
-            List<Seat> seats = null;
+            List<SeatClassDTO> seatClassDTOList;
             if (cachedString == null) {
                 long queryMask = StationCalculateUtil.bitmapMask(
                         trainStationMap.get(each.getTrainId()), each.getStartStation(), each.getEndStation());
-                seats = seatMapper.selectList(
+                List<Seat> seats = seatMapper.selectList(
                         Wrappers.lambdaQuery(Seat.class)
                                 .eq(Seat::getTrainId, each.getTrainId())
                                 .apply("(seat_bitmap & {0}) = 0", queryMask)
                 );
-                // 为各座位类型设置正确的区间价格
                 setSeatPrices(seats, each.getTrainId(), each.getStartStation(), each.getEndStation());
+
+                seatClassDTOList = seats.stream()
+                        .collect(Collectors.groupingBy(Seat::getSeatType))
+                        .entrySet().stream().map(entry -> SeatClassDTO.builder()
+                                .type(entry.getKey())
+                                .quantity(entry.getValue().size())
+                                .price(entry.getValue().get(0).getPrice())
+                                .build()
+                        ).toList();
 
                 DistributedLock lock = lockFactory.tryLock(
                         "seat:" + each.getTrainId() + ":" + each.getStartStation() + ":" + each.getEndStation(),
@@ -225,26 +229,15 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
                     throw new ServiceException("系统正忙，请稍后重试");
                 }
                 try {
-                    stringRedisTemplate.opsForValue().set(key, JSON.toJSONString(seats),
+                    stringRedisTemplate.opsForValue().set(key, JSON.toJSONString(seatClassDTOList),
                             RedisConstant.CACHE_TTL_SEAT_STOCK + ThreadLocalRandom.current().nextLong(RedisConstant.CACHE_TTL_SEAT_STOCK / 10),
                             TimeUnit.SECONDS);
                 } finally {
                     lock.unlock();
                 }
             } else {
-                seats = JSON.parseArray(cachedString, Seat.class);
+                seatClassDTOList = JSON.parseArray(cachedString, SeatClassDTO.class);
             }
-            Map<Integer, List<Seat>> seatTypeToSeatsMap =
-                    seats.stream()
-                            .collect(Collectors.groupingBy(Seat::getSeatType));
-            // 组装 seatClassList
-            List<SeatClassDTO> seatClassDTOList = seatTypeToSeatsMap.entrySet()
-                    .stream().map(entry -> SeatClassDTO.builder()
-                            .type(entry.getKey())
-                            .quantity(entry.getValue().size())
-                            .price(entry.getValue().get(0).getPrice())
-                            .build()
-                    ).toList();
             each.setSeatClassList(seatClassDTOList);
         }
 

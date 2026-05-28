@@ -24,6 +24,9 @@ public final class RedisConstant {
     /** 列车区间信息：trainId + startStation -> TrainStation */
     public static final String TRAIN_STATION_MAPPING = "train-station:%s_%s";
 
+    /** 列车完整区间列表: trainId -> List<TrainStation> */
+    public static final String TRAIN_STATION_LIST = "train-station-list:%s";
+
     /** Region 缓存加载标记 */
     public static final String REGION_LOADED_FLAG = "cache:region:loaded";
 

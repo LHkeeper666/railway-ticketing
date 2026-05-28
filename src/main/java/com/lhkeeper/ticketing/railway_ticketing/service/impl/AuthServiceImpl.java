@@ -55,7 +55,8 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 用户注册：责任链校验参数 → 手机号唯一性检查 → 密码加密 → 入库
+     * 用户注册：责任链校验参数 → 手机号唯一性检查 → 密码加密 → 入库。
+     * uk_phone 唯一约束兜底防并发注册同一手机号。
      */
     @Override
     public void register(RegisterReqDTO reqDTO) {
@@ -71,6 +72,10 @@ public class AuthServiceImpl implements AuthService {
         user.setPhone(phone);
         user.setPassword(passwordEncoder.encode(reqDTO.getPassword()));
         user.setUsername(reqDTO.getUsername());
-        userMapper.insert(user);
+        try {
+            userMapper.insert(user);
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            throw new ClientException("手机号已注册");
+        }
     }
 }

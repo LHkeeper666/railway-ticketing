@@ -26,6 +26,7 @@ import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
+import com.lhkeeper.ticketing.railway_ticketing.service.TrainStationService;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.select.SeatSelector;
 import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
@@ -64,6 +65,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final OrderMapper orderMapper;
     private final TrainMapper trainMapper;
     private final TrainStationMapper trainStationMapper;
+    private final TrainStationService trainStationService;
     private final SeatSelector seatSelector;
     private final OrderItemMapper orderItemMapper;
     private final PayMapper payMapper;
@@ -371,7 +373,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     }
 
     /**
-     * 模拟支付：责任链校验 → 计算订单总金额 → 生成 Pay 记录
+     * 模拟支付：责任链校验 → 检查 Pay 是否已存在 → 计算订单总金额 → 生成 Pay 记录
      */
     @Transactional(rollbackFor = Throwable.class)
     @Override
@@ -379,6 +381,16 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         orderPayChainContext.handler(ChainMarkEnum.ORDER_PAY.name(), orderSn);
 
         log.info("开始支付, orderSn={}", orderSn);
+
+        // 检查是否已有支付记录（uk_order_sn 唯一约束兜底防并发）
+        Pay existing = payMapper.selectOne(
+                Wrappers.lambdaQuery(Pay.class)
+                        .eq(Pay::getOrderSn, orderSn)
+        );
+        if (existing != null) {
+            throw new ClientException("订单已有支付记录，请勿重复支付");
+        }
+
         List<OrderItem> orderItems = orderItemMapper.selectList(
                 Wrappers.lambdaQuery(OrderItem.class)
                         .eq(OrderItem::getOrderSn, orderSn)
@@ -394,7 +406,11 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .totalAmount(totalAmount)
                 .status("PENDING")
                 .build();
-        payMapper.insert(pay);
+        try {
+            payMapper.insert(pay);
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            throw new ClientException("订单已有支付记录，请勿重复支付");
+        }
         log.info("支付记录已创建, orderSn={}, paySn={}, amount={}", orderSn, pay.getPaySn(), totalAmount);
     }
 
@@ -490,7 +506,10 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 pay.setTotalAmount(reqDTO.getTotalAmount());
             }
             payMapper.updateById(pay);
-        } else {
+            return;
+        }
+        // INSERT 优先，uk_order_sn 唯一约束兜底防并发重复
+        try {
             Pay newPay = Pay.builder()
                     .paySn(String.valueOf(snowflakeUtil.generateId()))
                     .orderSn(reqDTO.getOrderSn())
@@ -501,6 +520,23 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                     .gmtPayment("SUCCESS".equals(status) ? LocalDateTime.now() : null)
                     .build();
             payMapper.insert(newPay);
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            log.info("支付记录已存在（并发插入），改为更新, orderSn={}", reqDTO.getOrderSn());
+            payMapper.update(null,
+                    Wrappers.lambdaUpdate(Pay.class)
+                            .eq(Pay::getOrderSn, reqDTO.getOrderSn())
+                            .set(Pay::getTradeNo, reqDTO.getTradeNo())
+                            .set(Pay::getChannel, reqDTO.getChannel())
+                            .set(Pay::getStatus, status)
+                            .set(Pay::getGmtPayment, "SUCCESS".equals(status) ? LocalDateTime.now() : null)
+            );
+            if (reqDTO.getTotalAmount() != null) {
+                payMapper.update(null,
+                        Wrappers.lambdaUpdate(Pay.class)
+                                .eq(Pay::getOrderSn, reqDTO.getOrderSn())
+                                .set(Pay::getTotalAmount, reqDTO.getTotalAmount())
+                );
+            }
         }
     }
 
@@ -662,10 +698,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         // CAS 成功 → 执行副作用
         // 计算购买区间的位图掩码
-        List<TrainStation> trainStations = trainStationMapper.selectList(
-                Wrappers.lambdaQuery(TrainStation.class)
-                        .eq(TrainStation::getTrainId, order.getTrainId())
-        );
+        List<TrainStation> trainStations = trainStationService.getTrainStationsByTrainId(order.getTrainId());
         long purchaseMask = StationCalculateUtil.bitmapMask(
                 trainStations, order.getStartStation(), order.getEndStation());
 

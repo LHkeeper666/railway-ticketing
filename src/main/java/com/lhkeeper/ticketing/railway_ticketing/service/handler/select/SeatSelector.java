@@ -15,8 +15,8 @@ import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
-import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TrainStationPriceMapper;
+import com.lhkeeper.ticketing.railway_ticketing.service.TrainStationService;
 import com.lhkeeper.ticketing.railway_ticketing.util.StationCalculateUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -39,8 +39,8 @@ public class SeatSelector {
 
     private final PassengerMapper passengerMapper;
     private final SeatMapper seatMapper;
-    private final TrainStationMapper trainStationMapper;
     private final TrainStationPriceMapper trainStationPriceMapper;
+    private final TrainStationService trainStationService;
     private final StringRedisTemplate stringRedisTemplate;
 
     /** 普通购票选座，委托至 selectAndLockSeats */
@@ -87,10 +87,7 @@ public class SeatSelector {
         Map<Integer, List<TicketDTO>> groupedBySeatType = ticketDTOList.stream()
                 .collect(Collectors.groupingBy(TicketDTO::getSeatType));
 
-        List<TrainStation> trainStations = trainStationMapper.selectList(
-                Wrappers.lambdaQuery(TrainStation.class)
-                        .eq(TrainStation::getTrainId, trainId)
-        );
+        List<TrainStation> trainStations = trainStationService.getTrainStationsByTrainId(trainId);
         long purchaseMask = StationCalculateUtil.bitmapMask(trainStations, startStation, endStation);
 
         String trainIdStr = String.valueOf(trainId);
