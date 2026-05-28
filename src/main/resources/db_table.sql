@@ -255,6 +255,7 @@ CREATE TABLE `t_pay`
     `del_flag`         tinyint(1) DEFAULT NULL COMMENT '删除标记 0：未删除 1：删除',
     PRIMARY KEY (`id`),
     UNIQUE KEY `id` (`id`),
+    UNIQUE KEY `uk_order_sn` (`order_sn`),
     KEY                `idx_pay_sn` (`pay_sn`) USING BTREE,
     KEY                `idx_order_sn` (`order_sn`) USING BTREE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='支付表';
@@ -280,5 +281,6 @@ CREATE TABLE `t_user`
     `update_time`   datetime                                 DEFAULT NULL COMMENT '修改时间',
     `del_flag`      tinyint(1) DEFAULT NULL COMMENT '删除标识',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `idx_username` (`username`,`deletion_time`) USING BTREE
+    UNIQUE KEY `idx_username` (`username`,`deletion_time`) USING BTREE,
+    UNIQUE KEY `uk_phone` (`phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
