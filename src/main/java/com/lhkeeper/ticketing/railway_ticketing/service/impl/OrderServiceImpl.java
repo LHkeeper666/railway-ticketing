@@ -230,6 +230,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 .startStation(reqDTO.getStartStation())
                 .endStation(reqDTO.getEndStation())
                 .passengers(reqDTO.getPassengers())
+                .chooseSeats(reqDTO.getChooseSeats())
                 .build();
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
@@ -270,7 +271,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         try {
             List<TicketDTO> ticketDTOs = seatSelector.selectAndLockSeats(
-                    msg.getTrainId(), msg.getStartStation(), msg.getEndStation(), msg.getPassengers());
+                    msg.getTrainId(), msg.getStartStation(), msg.getEndStation(), msg.getPassengers(), msg.getChooseSeats());
 
             List<OrderItem> orderItems = new ArrayList<>();
             List<Ticket> tickets = new ArrayList<>();

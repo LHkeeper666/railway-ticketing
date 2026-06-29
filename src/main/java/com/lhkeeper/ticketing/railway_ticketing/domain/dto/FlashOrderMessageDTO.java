@@ -31,4 +31,7 @@ public class FlashOrderMessageDTO {
 
     /** 乘车人列表 */
     private List<OrderCreatePassengerDetailDTO> passengers;
+
+    /** 选座偏好 */
+    private List<String> chooseSeats;
 }
