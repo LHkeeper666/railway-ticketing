@@ -284,3 +284,37 @@ CREATE TABLE `t_user`
     UNIQUE KEY `idx_username` (`username`,`deletion_time`) USING BTREE,
     UNIQUE KEY `uk_phone` (`phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
+
+CREATE TABLE `t_waitlist`
+(
+    `id`              bigint(20) unsigned NOT NULL COMMENT '雪花ID',
+    `waitlist_sn`     varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '候补单号',
+    `order_sn`        varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '关联订单号',
+    `user_id`         bigint(20) NOT NULL COMMENT '用户ID',
+    `train_id`        bigint(20) NOT NULL COMMENT '列车ID',
+    `start_station`   varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '出发站',
+    `end_station`     varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '到达站',
+    `seat_type`       int(3) NOT NULL COMMENT '座位类型',
+    `passenger_count` int(3) NOT NULL COMMENT '候补人数',
+    `status`          int(3) NOT NULL DEFAULT 0 COMMENT '状态: 0=WAITING, 1=MATCHED, 2=EXPIRED, 3=CANCELED',
+    `expire_time`     datetime NOT NULL COMMENT '截止时间',
+    `create_time`     datetime DEFAULT NULL COMMENT '创建时间',
+    `update_time`     datetime DEFAULT NULL COMMENT '修改时间',
+    `del_flag`        tinyint(1) DEFAULT 0 COMMENT '删除标识',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_waitlist_sn` (`waitlist_sn`),
+    KEY `idx_train_seat_type` (`train_id`, `seat_type`, `start_station`, `end_station`, `status`) USING BTREE,
+    KEY `idx_status_expire` (`status`, `expire_time`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='候补记录表';
+
+CREATE TABLE `t_waitlist_passenger`
+(
+    `id`              bigint(20) unsigned NOT NULL COMMENT '雪花ID',
+    `waitlist_id`     bigint(20) NOT NULL COMMENT '候补记录ID',
+    `passenger_id`    bigint(20) NOT NULL COMMENT '乘客ID',
+    `seat_preference` varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '选座偏好(JSON)',
+    `create_time`     datetime DEFAULT NULL COMMENT '创建时间',
+    `del_flag`        tinyint(1) DEFAULT 0 COMMENT '删除标识',
+    PRIMARY KEY (`id`),
+    KEY `idx_waitlist_id` (`waitlist_id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='候补乘客表';

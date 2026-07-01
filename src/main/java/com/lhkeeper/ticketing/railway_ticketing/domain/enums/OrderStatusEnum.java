@@ -12,7 +12,9 @@ public enum OrderStatusEnum {
     /** 已取消 */
     CANCELED(2),
     /** 排队中（抢票） */
-    PENDING(3);
+    PENDING(3),
+    /** 候补中 */
+    WAITLIST(4);
 
     private final Integer code;
 

@@ -35,5 +35,10 @@ public enum ChainMarkEnum {
     /**
      * 取消订单过滤器
      */
-    ORDER_CANCEL;
+    ORDER_CANCEL,
+
+    /**
+     * 候补创建过滤器
+     */
+    WAITLIST_CREATE;
 }

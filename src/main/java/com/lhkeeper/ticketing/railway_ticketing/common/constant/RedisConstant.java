@@ -65,4 +65,14 @@ public final class RedisConstant {
 
     /** 令牌桶 key 前缀 */
     public static final String RATE_LIMIT_KEY_PREFIX = "rate_limit:";
+
+    /*
+     * ======================== 候补队列 ========================
+     */
+
+    /** 候补队列 key 模板: trainId_seatType_startStation_endStation */
+    public static final String WAITLIST_QUEUE = "waitlist:queue:%s_%s_%s_%s";
+
+    /** 候补匹配锁 key 前缀 */
+    public static final String WAITLIST_LOCK_PREFIX = "lock:waitlist:";
 }

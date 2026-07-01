@@ -27,6 +27,7 @@ import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
 import com.lhkeeper.ticketing.railway_ticketing.service.TrainStationService;
+import com.lhkeeper.ticketing.railway_ticketing.service.WaitlistService;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.select.SeatSelector;
 import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
@@ -81,6 +82,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final RabbitTemplate rabbitTemplate;
     private final TicketServiceImpl ticketServiceImpl;
     private final OrderItemServiceImpl orderItemServiceImpl;
+    @org.springframework.context.annotation.Lazy
+    private final WaitlistService waitlistService;
 
     /**
      * 创建普通购票订单：责任链校验 → 选座锁定 → 写 Order/OrderItem/Ticket → 发送超时取消消息
@@ -660,7 +663,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         // 手动取消时状态校验
         if (!timeoutCancel
                 && !OrderStatusEnum.UNPAID.getCode().equals(currentStatus)
-                && !OrderStatusEnum.PAID.getCode().equals(currentStatus)) {
+                && !OrderStatusEnum.PAID.getCode().equals(currentStatus)
+                && !OrderStatusEnum.WAITLIST.getCode().equals(currentStatus)) {
             throw new ClientException("订单状态不允许取消");
         }
 
@@ -678,6 +682,26 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             }
             // CAS 失败，重新读取最新状态后递归重试一次
             log.info("PENDING CAS 失败，重试, orderSn={}", orderSn);
+            cancelOrder(orderSn, timeoutCancel);
+            return;
+        }
+
+        // CAS 1.5: WAITLIST → CANCELED（快速路径，无座位锁定，清理 Waitlist + 退款）
+        if (OrderStatusEnum.WAITLIST.getCode().equals(currentStatus)) {
+            int updated = orderMapper.update(null,
+                    Wrappers.lambdaUpdate(Order.class)
+                            .eq(Order::getOrderSn, orderSn)
+                            .eq(Order::getStatus, OrderStatusEnum.WAITLIST.getCode())
+                            .set(Order::getStatus, OrderStatusEnum.CANCELED.getCode())
+            );
+            if (updated > 0) {
+                // 清理 Waitlist 记录 + Redis + 退款
+                waitlistService.cleanUpWaitlistByOrderSn(orderSn);
+                log.info("取消订单-WAITLIST快速路径, orderSn={}", orderSn);
+                return;
+            }
+            // CAS 失败，match 已推进到 UNPAID，递归重试
+            log.info("WAITLIST CAS 失败，重试, orderSn={}", orderSn);
             cancelOrder(orderSn, timeoutCancel);
             return;
         }
@@ -751,5 +775,21 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
 
         log.info("订单已取消, orderSn={}, wasPaid={}, itemStatus={}", orderSn, wasPaid, itemStatus);
+
+        // 释放座位后触发候补匹配（事务提交后执行，确保座位释放可见）
+        Long triggerTrainId = order.getTrainId();
+        String triggerStart = order.getStartStation();
+        String triggerEnd = order.getEndStation();
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        try {
+                            waitlistService.triggerMatch(triggerTrainId, triggerStart, triggerEnd);
+                        } catch (Exception e) {
+                            log.error("触发候补匹配异常, trainId={}", triggerTrainId, e);
+                        }
+                    }
+                });
     }
 }
