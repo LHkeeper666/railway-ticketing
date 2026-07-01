@@ -197,11 +197,19 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
             trainStationMap.put(tid, trainStationService.getTrainStationsByTrainId(tid));
         }
 
-        // 获取 seat_class_list
+        // 获取 seat_class_list：先 multiGet 批量查缓存（1 次往返），未命中再单条查 DB
+        List<String> stockKeys = new ArrayList<>();
         for (TrainServiceDTO each : trainServices) {
-            String key = String.format(RedisConstant.TICKET_STOCKING_MAPPING, each.getTrainId(), each.getStartStation(), each.getEndStation());
+            stockKeys.add(String.format(RedisConstant.TICKET_STOCKING_MAPPING,
+                    each.getTrainId(), each.getStartStation(), each.getEndStation()));
+        }
+        List<String> cachedStrings = stringRedisTemplate.opsForValue().multiGet(stockKeys);
 
-            String cachedString = stringRedisTemplate.opsForValue().get(key);
+        for (int i = 0; i < trainServices.size(); i++) {
+            TrainServiceDTO each = trainServices.get(i);
+            String key = stockKeys.get(i);
+            String cachedString = cachedStrings.get(i);
+
             List<SeatClassDTO> seatClassDTOList;
             if (cachedString == null) {
                 long queryMask = StationCalculateUtil.bitmapMask(

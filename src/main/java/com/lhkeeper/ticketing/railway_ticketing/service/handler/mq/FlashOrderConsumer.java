@@ -24,7 +24,7 @@ public class FlashOrderConsumer {
 
     private final OrderService orderService;
 
-    @RabbitListener(queues = RabbitMQConfig.FLASH_ORDER_QUEUE)
+    @RabbitListener(queues = RabbitMQConfig.FLASH_ORDER_QUEUE, concurrency = "5")
     public void onMessage(String messageBody, Channel channel,
                           @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         log.info("收到抢票消息, body={}", messageBody);
