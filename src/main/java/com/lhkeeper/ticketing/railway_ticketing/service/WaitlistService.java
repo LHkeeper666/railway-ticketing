@@ -16,5 +16,7 @@ public interface WaitlistService {
 
     void triggerMatch(Long trainId, String startStation, String endStation);
 
+    void processMatch(Long trainId, String startStation, String endStation);
+
     void cleanUpWaitlistByOrderSn(String orderSn);
 }

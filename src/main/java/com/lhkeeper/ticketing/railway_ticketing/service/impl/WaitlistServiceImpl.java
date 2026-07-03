@@ -8,6 +8,7 @@ import com.lhkeeper.ticketing.railway_ticketing.config.RabbitMQConfig;
 import com.lhkeeper.ticketing.railway_ticketing.context.UserContext;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.WaitlistMatchMessageDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.WaitlistCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.WaitlistCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.WaitlistDetailRespDTO;
@@ -482,7 +483,22 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
 
     @Override
     public void triggerMatch(Long trainId, String startStation, String endStation) {
-        // 遍历常见座位类型（1=二等座, 2=一等座, 3=商务座, 4=硬座, 5=软座, 6=硬卧, 7=软卧）
+        WaitlistMatchMessageDTO msg = WaitlistMatchMessageDTO.builder()
+                .trainId(trainId)
+                .startStation(startStation)
+                .endStation(endStation)
+                .build();
+        try {
+            rabbitTemplate.convertAndSend(RabbitMQConfig.WAITLIST_MATCH_EXCHANGE,
+                    RabbitMQConfig.WAITLIST_MATCH_ROUTING_KEY, msg);
+            log.info("候补匹配消息已发送, trainId={}", trainId);
+        } catch (Exception e) {
+            log.error("发送候补匹配消息失败, trainId={}", trainId, e);
+        }
+    }
+
+    @Override
+    public void processMatch(Long trainId, String startStation, String endStation) {
         int[] seatTypes = {1, 2, 3, 4, 5, 6, 7};
         for (int seatType : seatTypes) {
             String queueKey = buildQueueKey(trainId, seatType, startStation, endStation);
@@ -491,7 +507,7 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
                 try {
                     processWaitlist(trainId, seatType, startStation, endStation);
                 } catch (Exception e) {
-                    log.error("候补触发匹配异常, trainId={}, seatType={}", trainId, seatType, e);
+                    log.error("候补匹配异常, trainId={}, seatType={}", trainId, seatType, e);
                 }
             }
         }

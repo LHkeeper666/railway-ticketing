@@ -36,6 +36,14 @@ public class RabbitMQConfig {
     /** 订单支付超时（毫秒），默认 15 分钟 */
     public static final String ORDER_TIMEOUT_MS = String.valueOf(15 * 60 * 1000);
 
+    // ==================== Waitlist Match ====================
+
+    public static final String WAITLIST_MATCH_QUEUE = "waitlist.match.queue";
+    public static final String WAITLIST_MATCH_EXCHANGE = "waitlist.match.exchange";
+    public static final String WAITLIST_MATCH_ROUTING_KEY = "waitlist.match.trigger";
+    public static final String WAITLIST_MATCH_DLQ = "waitlist.match.dlq";
+    public static final String WAITLIST_MATCH_DLX = "waitlist.match.dlx";
+
     @Bean
     public Queue flashOrderQueue() {
         return QueueBuilder.durable(FLASH_ORDER_QUEUE)
@@ -110,6 +118,45 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(orderTimeoutCancelQueue())
                 .to(orderTimeoutDlx())
                 .with(ORDER_TIMEOUT_CANCEL_ROUTING_KEY);
+    }
+
+    // ==================== Waitlist Match Beans ====================
+
+    @Bean
+    public Queue waitlistMatchQueue() {
+        return QueueBuilder.durable(WAITLIST_MATCH_QUEUE)
+                .deadLetterExchange(WAITLIST_MATCH_DLX)
+                .deadLetterRoutingKey(WAITLIST_MATCH_DLQ)
+                .build();
+    }
+
+    @Bean
+    public DirectExchange waitlistMatchExchange() {
+        return new DirectExchange(WAITLIST_MATCH_EXCHANGE);
+    }
+
+    @Bean
+    public Binding waitlistMatchBinding() {
+        return BindingBuilder.bind(waitlistMatchQueue())
+                .to(waitlistMatchExchange())
+                .with(WAITLIST_MATCH_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue waitlistMatchDlq() {
+        return new Queue(WAITLIST_MATCH_DLQ, true);
+    }
+
+    @Bean
+    public DirectExchange waitlistMatchDlx() {
+        return new DirectExchange(WAITLIST_MATCH_DLX);
+    }
+
+    @Bean
+    public Binding waitlistMatchDlqBinding() {
+        return BindingBuilder.bind(waitlistMatchDlq())
+                .to(waitlistMatchDlx())
+                .with(WAITLIST_MATCH_DLQ);
     }
 
     @Bean
