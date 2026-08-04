@@ -40,5 +40,15 @@ public enum ChainMarkEnum {
     /**
      * 候补创建过滤器
      */
-    WAITLIST_CREATE;
+    WAITLIST_CREATE,
+
+    /**
+     * 退票过滤器
+     */
+    ORDER_REFUND,
+
+    /**
+     * 改签过滤器
+     */
+    ORDER_CHANGE;
 }

@@ -62,4 +62,10 @@ public class Ticket extends BaseEntity {
      */
     @TableField("ticket_status")
     private Integer ticketStatus;
+
+    /**
+     * 购买区间的位图掩码，取消/退票/改签时用于精确还原占座bit
+     */
+    @TableField("purchase_mask")
+    private Long purchaseMask;
 }

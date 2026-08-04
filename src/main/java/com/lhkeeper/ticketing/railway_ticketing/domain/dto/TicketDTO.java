@@ -60,4 +60,9 @@ public class TicketDTO {
      * 座位金额
      */
     private BigDecimal amount;
+
+    /**
+     * 购买区间的位图掩码，取消/退票时用于精确还原占座 bit
+     */
+    private Long purchaseMask;
 }

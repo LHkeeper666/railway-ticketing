@@ -4,14 +4,20 @@ import com.lhkeeper.ticketing.railway_ticketing.common.annotation.RateLimit;
 import com.lhkeeper.ticketing.railway_ticketing.common.result.Result;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.PayCallbackReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.ChangeReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.RefundReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.WaitlistCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.ChangeRespDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.RefundRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.WaitlistCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.WaitlistDetailRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
+import com.lhkeeper.ticketing.railway_ticketing.service.ChangeService;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
+import com.lhkeeper.ticketing.railway_ticketing.service.RefundService;
 import com.lhkeeper.ticketing.railway_ticketing.service.WaitlistService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +36,12 @@ public class OrderController {
 
     @Autowired
     private WaitlistService waitlistService;
+
+    @Autowired
+    private RefundService refundService;
+
+    @Autowired
+    private ChangeService changeService;
 
     /**
      * 创建订单（普通购票）
@@ -117,6 +129,37 @@ public class OrderController {
     @GetMapping("/waitlist/{waitlistSn}")
     public Result<WaitlistDetailRespDTO> getWaitlistDetail(@PathVariable("waitlistSn") String waitlistSn) {
         return Result.success(waitlistService.getWaitlistDetail(waitlistSn));
+    }
+
+    /**
+     * 退票，支持部分退票（按 ticket 粒度）
+     */
+    @PostMapping("/{orderSn}/refund")
+    public Result<?> refundOrder(@PathVariable("orderSn") String orderSn,
+                                  @RequestBody RefundReqDTO reqDTO) {
+        reqDTO.setOrderSn(orderSn);
+        log.info("收到退票请求, orderSn={}, ticketIds={}", orderSn, reqDTO.getTicketIds());
+        try {
+            return Result.success(refundService.refund(reqDTO));
+        } catch (ClientException e) {
+            return Result.fail(e.getMessage());
+        }
+    }
+
+    /**
+     * 改签，支持跨车次/同车次改签（整单改签）
+     */
+    @PostMapping("/{orderSn}/change")
+    public Result<?> changeOrder(@PathVariable("orderSn") String orderSn,
+                                  @RequestBody ChangeReqDTO reqDTO) {
+        reqDTO.setOrderSn(orderSn);
+        log.info("收到改签请求, orderSn={}, ticketIds={}, newTrainId={}",
+                orderSn, reqDTO.getTicketIds(), reqDTO.getNewTrainId());
+        try {
+            return Result.success(changeService.change(reqDTO));
+        } catch (ClientException e) {
+            return Result.fail(e.getMessage());
+        }
     }
 
     /**

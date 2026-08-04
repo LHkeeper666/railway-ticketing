@@ -17,6 +17,8 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.enums.*;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
 import com.lhkeeper.ticketing.railway_ticketing.service.WaitlistService;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
@@ -56,7 +58,9 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
     private final PassengerMapper passengerMapper;
     private final TrainStationPriceMapper trainStationPriceMapper;
     private final SeatSelector seatSelector;
-    private final OrderService orderService;
+    @Lazy
+    @Autowired
+    private OrderService orderService;
     private final SnowflakeUtil snowflakeUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final RabbitTemplate rabbitTemplate;

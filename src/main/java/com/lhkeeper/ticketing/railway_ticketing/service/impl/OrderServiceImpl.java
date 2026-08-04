@@ -10,6 +10,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.FlashOrderMessageDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.RouteDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.PayCallbackReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreateRespDTO;
@@ -48,10 +49,14 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
 
@@ -82,8 +87,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final RabbitTemplate rabbitTemplate;
     private final TicketServiceImpl ticketServiceImpl;
     private final OrderItemServiceImpl orderItemServiceImpl;
-    @org.springframework.context.annotation.Lazy
-    private final WaitlistService waitlistService;
+    @Lazy
+    @Autowired
+    private WaitlistService waitlistService;
 
     /**
      * 创建普通购票订单：责任链校验 → 选座锁定 → 写 Order/OrderItem/Ticket → 发送超时取消消息
@@ -144,6 +150,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                     .seatNumber(ticketDTO.getSeatNumber())
                     .passengerId(Long.parseLong(ticketDTO.getPassengerId()))
                     .ticketStatus(TicketStatusEnum.UNPAID.getCode())
+                    .purchaseMask(ticketDTO.getPurchaseMask())
                     .build()
             );
         }
@@ -152,6 +159,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         orderMapper.insert(order);
         ticketServiceImpl.saveBatch(tickets);
         orderItemServiceImpl.saveBatch(orderItems);
+
+        // 填充 ticketId 到响应 DTO（ticket 由 ASSIGN_ID 生成，saveBatch 后才有 ID）
+        fillTicketIds(orderItemDTOs, tickets);
 
         sendOrderTimeoutMessage(orderSn);
 
@@ -304,6 +314,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                         .seatNumber(ticketDTO.getSeatNumber())
                         .passengerId(Long.parseLong(ticketDTO.getPassengerId()))
                         .ticketStatus(TicketStatusEnum.UNPAID.getCode())
+                        .purchaseMask(ticketDTO.getPurchaseMask())
                         .build()
                 );
             }
@@ -356,6 +367,19 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             return train;
         } finally {
             lock.unlock();
+        }
+    }
+
+    /**
+     * saveBatch 后 ticket 才有 ID（ASSIGN_ID），将 ticketId 填充到对应的 OrderItemDTO
+     */
+    private void fillTicketIds(List<OrderItemDTO> orderItemDTOs, List<Ticket> tickets) {
+        Map<String, Long> ticketIdMap = new HashMap<>();
+        for (Ticket ticket : tickets) {
+            ticketIdMap.put(ticket.getCarriageNumber() + "_" + ticket.getSeatNumber(), ticket.getId());
+        }
+        for (OrderItemDTO dto : orderItemDTOs) {
+            dto.setTicketId(ticketIdMap.get(dto.getCarriageNumber() + "_" + dto.getSeatNumber()));
         }
     }
 
@@ -562,19 +586,33 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                         .eq(OrderItem::getOrderSn, orderSn)
         );
 
+        // 查 ticket 表获取 ticketId，按 (carriageNumber_seatNumber) 建索引
+        List<Ticket> tickets = ticketMapper.selectList(
+                Wrappers.lambdaQuery(Ticket.class)
+                        .eq(Ticket::getOrderSn, orderSn)
+        );
+        Map<String, Long> ticketIdMap = new HashMap<>();
+        for (Ticket ticket : tickets) {
+            ticketIdMap.put(ticket.getCarriageNumber() + "_" + ticket.getSeatNumber(), ticket.getId());
+        }
+
         List<OrderItemDetailDTO> itemDTOs = orderItems.stream()
-                .map(item -> OrderItemDetailDTO.builder()
-                        .realName(item.getRealName())
-                        .idType(item.getIdType())
-                        .idCard(item.getIdCard())
-                        .ticketType(item.getTicketType())
-                        .seatType(item.getSeatType())
-                        .carriageNumber(item.getCarriageNumber())
-                        .seatNumber(item.getSeatNumber())
-                        .amount(item.getAmount())
-                        .status(item.getStatus())
-                        .phone(item.getPhone())
-                        .build())
+                .map(item -> {
+                    String key = item.getCarriageNumber() + "_" + item.getSeatNumber();
+                    return OrderItemDetailDTO.builder()
+                            .realName(item.getRealName())
+                            .idType(item.getIdType())
+                            .idCard(item.getIdCard())
+                            .ticketType(item.getTicketType())
+                            .seatType(item.getSeatType())
+                            .carriageNumber(item.getCarriageNumber())
+                            .seatNumber(item.getSeatNumber())
+                            .amount(item.getAmount())
+                            .status(item.getStatus())
+                            .phone(item.getPhone())
+                            .ticketId(ticketIdMap.get(key))
+                            .build();
+                })
                 .toList();
 
         Pay pay = payMapper.selectOne(
@@ -722,17 +760,19 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
 
         // CAS 成功 → 执行副作用
-        // 计算购买区间的位图掩码
-        List<TrainStation> trainStations = trainStationService.getTrainStationsByTrainId(order.getTrainId());
-        long purchaseMask = StationCalculateUtil.bitmapMask(
-                trainStations, order.getStartStation(), order.getEndStation());
-
-        // 位图释放座位：清除购买区间对应的位
+        // 位图释放座位：从 ticket 中读取落盘时的 purchaseMask，避免因列车站变更导致 mask 不一致
         List<Ticket> tickets = ticketMapper.selectList(
                 Wrappers.lambdaQuery(Ticket.class)
                         .eq(Ticket::getOrderSn, orderSn)
         );
+        List<TrainStation> trainStations = trainStationService.getTrainStationsByTrainId(order.getTrainId());
         for (Ticket ticket : tickets) {
+            Long purchaseMask = ticket.getPurchaseMask();
+            if (purchaseMask == null) {
+                // 兼容旧数据：重新计算 mask
+                purchaseMask = StationCalculateUtil.bitmapMask(
+                        trainStations, order.getStartStation(), order.getEndStation());
+            }
             seatMapper.update(null,
                     Wrappers.lambdaUpdate(Seat.class)
                             .eq(Seat::getTrainId, ticket.getTrainId())

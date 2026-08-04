@@ -51,4 +51,9 @@ public class OrderItemDTO {
      * 订单金额
      */
     private BigDecimal amount;
+
+    /**
+     * ticket 表主键 ID，用于退票/改签
+     */
+    private Long ticketId;
 }

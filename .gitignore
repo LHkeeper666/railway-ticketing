@@ -46,3 +46,5 @@ docker-env/mysql/logs/
 scripts/
 
 *.log
+
+docs/

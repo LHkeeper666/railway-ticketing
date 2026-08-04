@@ -129,7 +129,7 @@ public class SeatSelector {
 
             // 11. 填充 TicketDTO
             BigDecimal price = getPrice(trainId, startStation, endStation, seatType);
-            fillTicketDTO(ticketDTOList, selectedSeats, price);
+            fillTicketDTO(ticketDTOList, selectedSeats, price, purchaseMask);
 
             // 12. 删除余票缓存
             invalidateStockCache(trainId, startStation, endStation, trainStations);
@@ -189,13 +189,14 @@ public class SeatSelector {
      * @param selectedSeats  选中的座位列表
      * @param price          票价
      */
-    private void fillTicketDTO(List<TicketDTO> ticketDTOList, List<SelectedSeatDTO> selectedSeats, BigDecimal price) {
+    private void fillTicketDTO(List<TicketDTO> ticketDTOList, List<SelectedSeatDTO> selectedSeats, BigDecimal price, long purchaseMask) {
         for (int i = 0; i < ticketDTOList.size(); i++) {
             TicketDTO ticketDTO = ticketDTOList.get(i);
             SelectedSeatDTO selected = selectedSeats.get(i);
             ticketDTO.setSeatNumber(selected.getSeatNumber());
             ticketDTO.setCarriageNumber(selected.getCarriageNumber());
             ticketDTO.setAmount(price);
+            ticketDTO.setPurchaseMask(purchaseMask);
         }
     }
 

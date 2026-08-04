@@ -67,6 +67,7 @@ CREATE TABLE `t_ticket`
     `seat_number`     varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '座位号',
     `passenger_id`    bigint(20) DEFAULT NULL COMMENT '乘车人ID',
     `ticket_status`   int(3) DEFAULT NULL COMMENT '车票状态',
+    `purchase_mask`   bigint(20) DEFAULT NULL COMMENT '购买区间位图掩码，用于取消/退票/改签精确释放座位',
     `create_time`     datetime                                DEFAULT NULL COMMENT '创建时间',
     `update_time`     datetime                                DEFAULT NULL COMMENT '修改时间',
     `del_flag`        tinyint(1) DEFAULT NULL COMMENT '删除标识',
@@ -318,3 +319,50 @@ CREATE TABLE `t_waitlist_passenger`
     PRIMARY KEY (`id`),
     KEY `idx_waitlist_id` (`waitlist_id`) USING BTREE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='候补乘客表';
+
+CREATE TABLE `t_refund_order`
+(
+    `id`                  bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',
+    `refund_sn`           varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '退款单号',
+    `order_sn`            varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '订单号',
+    `refund_amount`       decimal(10,2) NOT NULL COMMENT '实退金额',
+    `fee_amount`          decimal(10,2) NOT NULL COMMENT '手续费',
+    `total_amount`        decimal(10,2) NOT NULL COMMENT '票面总金额',
+    `refund_ticket_count` int(3) NOT NULL COMMENT '退票张数',
+    `status`              varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '状态: SUCCESS/FAIL',
+    `reason`              varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '退款原因',
+    `departure_time`      datetime DEFAULT NULL COMMENT '冗余列车出发时间，用于手续费审计',
+    `create_time`         datetime DEFAULT NULL COMMENT '创建时间',
+    `update_time`         datetime DEFAULT NULL COMMENT '修改时间',
+    `del_flag`            tinyint(1) DEFAULT NULL COMMENT '删除标识',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_refund_sn` (`refund_sn`),
+    KEY `idx_order_sn` (`order_sn`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='退票记录表';
+
+CREATE TABLE `t_change_order`
+(
+    `id`                  bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',
+    `change_sn`           varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '改签单号',
+    `order_sn`            varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '订单号',
+    `old_train_id`        bigint(20) NOT NULL COMMENT '原列车ID',
+    `new_train_id`        bigint(20) NOT NULL COMMENT '新列车ID',
+    `old_start_station`   varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '原出发站',
+    `old_end_station`     varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '原到达站',
+    `new_start_station`   varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '新出发站',
+    `new_end_station`     varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '新到达站',
+    `old_amount`          decimal(10,2) NOT NULL COMMENT '旧票总金额',
+    `new_amount`          decimal(10,2) NOT NULL COMMENT '新票总金额',
+    `price_diff`          decimal(10,2) NOT NULL COMMENT '价差（正=补差，负=退款）',
+    `fee_amount`          decimal(10,2) NOT NULL COMMENT '手续费',
+    `change_ticket_count` int(3) NOT NULL COMMENT '改签张数',
+    `status`              varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '状态: COMPLETED/PENDING_PAY/FAILED',
+    `old_departure_time`  datetime DEFAULT NULL COMMENT '原列车出发时间',
+    `new_departure_time`  datetime DEFAULT NULL COMMENT '新列车出发时间',
+    `create_time`         datetime DEFAULT NULL COMMENT '创建时间',
+    `update_time`         datetime DEFAULT NULL COMMENT '修改时间',
+    `del_flag`            tinyint(1) DEFAULT NULL COMMENT '删除标识',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_change_sn` (`change_sn`),
+    KEY `idx_order_sn` (`order_sn`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='改签记录表';

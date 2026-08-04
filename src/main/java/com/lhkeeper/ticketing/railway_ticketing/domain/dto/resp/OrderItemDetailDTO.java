@@ -22,4 +22,7 @@ public class OrderItemDetailDTO {
     private BigDecimal amount;
     private Integer status;
     private String phone;
+
+    /** ticket 表主键 ID，用于退票/改签 */
+    private Long ticketId;
 }
