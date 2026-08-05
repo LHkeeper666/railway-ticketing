@@ -1,8 +1,8 @@
-INSERT INTO `t_passenger` (`id`, `username`, `real_name`, `id_type`, `id_card`, `discount_type`, `phone`,
+INSERT INTO `t_passenger` (`id`, `username`, `user_id`, `real_name`, `id_type`, `id_card`, `discount_type`, `phone`,
                               `create_date`, `verify_status`, `create_time`, `update_time`, `del_flag`)
-VALUES (1683029289099362304, 'admin', '万重山', 0, '7XT4j1iCfK8DeSiZeJs1M00oDOG/KxdBXKR34j5YLZc=', 0,
+VALUES (1683029289099362304, 'admin', 1683025552364568576, '万重山', 0, '7XT4j1iCfK8DeSiZeJs1M00oDOG/KxdBXKR34j5YLZc=', 0,
         'MZObk+5TeYPLHtP2A6+aiw==', '2023-07-23 16:20:26', 0, '2023-07-23 16:20:26', '2023-07-23 16:20:26', 0),
-       (1683029597561061376, 'admin', '金来', 0, 'R0L4oYtT1xHe04P4h9qmZycS0T45NS7WO6J58AqzJgs=', 0,
+       (1683029597561061376, 'admin', 1683025552364568576, '金来', 0, 'R0L4oYtT1xHe04P4h9qmZycS0T45NS7WO6J58AqzJgs=', 0,
         'RPKP/q6lpWsY06C178ARjA==', '2023-07-23 16:21:40', 0, '2023-07-23 16:21:40', '2023-07-23 16:21:40', 0);
 
 INSERT INTO `t_user` (`id`, `username`, `password`, `real_name`, `region`, `id_type`, `id_card`, `phone`,

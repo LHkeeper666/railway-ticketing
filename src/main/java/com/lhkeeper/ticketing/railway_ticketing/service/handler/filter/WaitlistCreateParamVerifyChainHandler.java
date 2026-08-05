@@ -7,6 +7,7 @@ import com.lhkeeper.ticketing.railway_ticketing.context.UserContext;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.SeatClassDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.WaitlistCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
+import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Passenger;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Seat;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.TrainStation;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Waitlist;
@@ -15,6 +16,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.enums.WaitlistStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.OrderMapper;
+import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.SeatMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.WaitlistMapper;
 import com.lhkeeper.ticketing.railway_ticketing.service.TrainStationService;
@@ -37,6 +39,7 @@ public class WaitlistCreateParamVerifyChainHandler implements WaitlistCreateChai
     private final OrderMapper orderMapper;
     private final WaitlistMapper waitlistMapper;
     private final SeatMapper seatMapper;
+    private final PassengerMapper passengerMapper;
     private final TrainStationService trainStationService;
     private final StringRedisTemplate stringRedisTemplate;
     private final DistributedLockFactory lockFactory;
@@ -49,7 +52,20 @@ public class WaitlistCreateParamVerifyChainHandler implements WaitlistCreateChai
         String endStation = req.getEndStation();
         Integer seatType = req.getSeatType();
 
-        // 1. 检查同一区间是否有 UNPAID/PAID/PENDING 订单
+        // 1. 校验乘车人归属
+        List<String> passengerIds = req.getPassengers().stream()
+                .map(p -> p.getPassengerId()).distinct().toList();
+        List<Passenger> passengers = passengerMapper.selectByIds(passengerIds);
+        if (passengers.size() != passengerIds.size()) {
+            throw new ClientException("部分乘车人不存在");
+        }
+        for (Passenger passenger : passengers) {
+            if (!userId.equals(passenger.getUserId())) {
+                throw new ClientException("部分乘车人无效");
+            }
+        }
+
+        // 2. 检查同一区间是否有 UNPAID/PAID/PENDING 订单
         List<Integer> activeStatuses = Arrays.asList(
                 OrderStatusEnum.UNPAID.getCode(),
                 OrderStatusEnum.PAID.getCode(),
@@ -67,7 +83,7 @@ public class WaitlistCreateParamVerifyChainHandler implements WaitlistCreateChai
             throw new ClientException("您已有该区间的有效订单，请勿重复提交");
         }
 
-        // 2. 检查同一区间是否有 WAITING 候补
+        // 3. 检查同一区间是否有 WAITING 候补
         Waitlist existingWaitlist = waitlistMapper.selectOne(
                 Wrappers.lambdaQuery(Waitlist.class)
                         .eq(Waitlist::getUserId, userId)
@@ -80,7 +96,7 @@ public class WaitlistCreateParamVerifyChainHandler implements WaitlistCreateChai
             throw new ClientException("您已有候补订单，请勿重复提交");
         }
 
-        // 3. 检查该座位类型确实无余票
+        // 4. 检查该座位类型确实无余票
         List<TrainStation> stations = trainStationService.getTrainStationsByTrainId(trainId);
         long queryMask = StationCalculateUtil.bitmapMask(stations, startStation, endStation);
 

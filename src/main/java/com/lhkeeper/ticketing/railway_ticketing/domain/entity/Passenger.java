@@ -27,6 +27,12 @@ public class Passenger extends BaseEntity {
     private String username;
 
     /**
+     * 用户ID
+     */
+    @TableField("user_id")
+    private Long userId;
+
+    /**
      * 真实姓名
      */
     @TableField("real_name")

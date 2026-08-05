@@ -1,5 +1,6 @@
 package com.lhkeeper.ticketing.railway_ticketing.service.handler.filter;
 
+import com.lhkeeper.ticketing.railway_ticketing.context.UserContext;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderCreatePassengerDetailDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Passenger;
@@ -35,6 +36,12 @@ public class OrderCreateParamVerifyChainHandler implements OrderCreateChainFilte
         List<Passenger> passengers = passengerMapper.selectByIds(passengerIds);
         if (passengers.isEmpty() || passengerIds.size() != passengers.size()) {
             throw new ClientException("部分乘车人不存在");
+        }
+        Long currentUserId = UserContext.get().getUserId();
+        for (Passenger passenger : passengers) {
+            if (!currentUserId.equals(passenger.getUserId())) {
+                throw new ClientException("部分乘车人无效");
+            }
         }
         requestParam.getPassengers().forEach(passenger -> {
             if (!SeatTypeEnum.isValidCode(passenger.getSeatType())) {

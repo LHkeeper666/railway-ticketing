@@ -221,6 +221,7 @@ CREATE TABLE `t_passenger`
 (
     `id`            bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',
     `username`      varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '用户名',
+    `user_id`       bigint(20) DEFAULT NULL COMMENT '用户ID',
     `real_name`     varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '真实姓名',
     `id_type`       int(3) DEFAULT NULL COMMENT '证件类型',
     `id_card`       varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '证件号码',
@@ -233,8 +234,15 @@ CREATE TABLE `t_passenger`
     `del_flag`      tinyint(1) DEFAULT NULL COMMENT '删除标识',
     PRIMARY KEY (`id`),
     KEY             `idx_id_card` (`id_card`) USING BTREE,
-    KEY             `idx_username` (`username`) USING BTREE
+    KEY             `idx_username` (`username`) USING BTREE,
+    KEY             `idx_user_id` (`user_id`) USING BTREE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='乘车人表';
+
+-- 存量数据回填 SQL（新加 user_id 列后执行）:
+-- UPDATE t_passenger p
+-- INNER JOIN t_user u ON p.username = u.username
+-- SET p.user_id = u.id
+-- WHERE p.user_id IS NULL;
 
 CREATE TABLE `t_pay`
 (

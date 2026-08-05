@@ -50,5 +50,20 @@ public enum ChainMarkEnum {
     /**
      * 改签过滤器
      */
-    ORDER_CHANGE;
+    ORDER_CHANGE,
+
+    /**
+     * 乘客创建过滤器
+     */
+    PASSENGER_CREATE,
+
+    /**
+     * 乘客更新过滤器
+     */
+    PASSENGER_UPDATE,
+
+    /**
+     * 乘客删除过滤器
+     */
+    PASSENGER_DELETE;
 }

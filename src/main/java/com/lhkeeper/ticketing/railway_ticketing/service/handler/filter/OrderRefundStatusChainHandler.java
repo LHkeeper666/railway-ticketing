@@ -4,13 +4,13 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lhkeeper.ticketing.railway_ticketing.context.UserContext;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.RefundReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
-import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Passenger;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PassengerRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Ticket;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.OrderMapper;
-import com.lhkeeper.ticketing.railway_ticketing.mapper.PassengerMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.TicketMapper;
+import com.lhkeeper.ticketing.railway_ticketing.service.PassengerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -28,7 +28,7 @@ public class OrderRefundStatusChainHandler implements OrderRefundChainFilter {
 
     private final OrderMapper orderMapper;
     private final TicketMapper ticketMapper;
-    private final PassengerMapper passengerMapper;
+    private final PassengerService passengerService;
 
     @Override
     public void handler(RefundReqDTO reqDTO) {
@@ -49,15 +49,12 @@ public class OrderRefundStatusChainHandler implements OrderRefundChainFilter {
         }
 
         // 非下单人：校验是否为本人的票（12306 乘车人独立退票场景）
-        List<Passenger> userPassengers = passengerMapper.selectList(
-                Wrappers.lambdaQuery(Passenger.class)
-                        .eq(Passenger::getUsername, UserContext.get().getUsername())
-        );
+        List<PassengerRespDTO> userPassengers = passengerService.listMine();
         if (userPassengers.isEmpty()) {
             throw new ClientException("无权操作此订单");
         }
         Set<Long> userPassengerIds = userPassengers.stream()
-                .map(Passenger::getId)
+                .map(PassengerRespDTO::getId)
                 .collect(Collectors.toSet());
 
         List<Ticket> tickets = ticketMapper.selectBatchIds(reqDTO.getTicketIds());
