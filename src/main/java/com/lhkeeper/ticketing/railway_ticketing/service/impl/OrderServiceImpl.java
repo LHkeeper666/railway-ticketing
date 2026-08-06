@@ -1,9 +1,12 @@
 package com.lhkeeper.ticketing.railway_ticketing.service.impl;
 
 import com.alibaba.fastjson2.JSON;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
+import com.lhkeeper.ticketing.railway_ticketing.common.page.PageResponse;
 import com.lhkeeper.ticketing.railway_ticketing.context.UserContext;
 import com.lhkeeper.ticketing.railway_ticketing.config.RabbitMQConfig;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.FlashOrderMessageDTO;
@@ -12,11 +15,13 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.RouteDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.TicketDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderListReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.PayCallbackReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderItemDetailDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderListRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PayInfoDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
@@ -49,9 +54,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
@@ -80,6 +87,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final AbstractChainContext<String> orderPayChainContext;
     private final AbstractChainContext<PayCallbackReqDTO> payNotifyChainContext;
     private final AbstractChainContext<String> orderCancelChainContext;
+    private final AbstractChainContext<OrderListReqDTO> orderListChainContext;
     private final SeatMapper seatMapper;
     private final SnowflakeUtil snowflakeUtil;
     private final StringRedisTemplate stringRedisTemplate;
@@ -831,5 +839,59 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                         }
                     }
                 });
+    }
+
+    @Override
+    public PageResponse<OrderListRespDTO> listUserOrders(OrderListReqDTO reqDTO) {
+        orderListChainContext.handler(ChainMarkEnum.ORDER_LIST.name(), reqDTO);
+
+        Long userId = UserContext.get().getUserId();
+        Page<Order> page = new Page<>(reqDTO.getCurrent(), reqDTO.getSize());
+
+        IPage<Order> orderPage = orderMapper.selectPage(page,
+                Wrappers.<Order>lambdaQuery()
+                        .eq(Order::getUserId, userId)
+                        .eq(reqDTO.getStatus() != null, Order::getStatus, reqDTO.getStatus())
+                        .ge(reqDTO.getStartDate() != null, Order::getRidingDate, reqDTO.getStartDate())
+                        .le(reqDTO.getEndDate() != null, Order::getRidingDate, reqDTO.getEndDate())
+                        .like(reqDTO.getTrainNumber() != null, Order::getTrainNumber, reqDTO.getTrainNumber())
+                        .orderByDesc(Order::getOrderTime));
+
+        List<String> orderSns = orderPage.getRecords().stream()
+                .map(Order::getOrderSn)
+                .collect(Collectors.toList());
+
+        Map<String, List<OrderItem>> itemMap = Collections.emptyMap();
+        if (!orderSns.isEmpty()) {
+            itemMap = orderItemMapper.selectList(
+                    Wrappers.<OrderItem>lambdaQuery().in(OrderItem::getOrderSn, orderSns))
+                    .stream()
+                    .collect(Collectors.groupingBy(OrderItem::getOrderSn));
+        }
+
+        final Map<String, List<OrderItem>> finalItemMap = itemMap;
+        List<OrderListRespDTO> records = orderPage.getRecords().stream()
+                .map(order -> {
+                    List<OrderItem> items = finalItemMap.getOrDefault(order.getOrderSn(), Collections.emptyList());
+                    BigDecimal totalAmount = items.stream()
+                            .map(OrderItem::getAmount)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    return OrderListRespDTO.builder()
+                            .orderSn(order.getOrderSn())
+                            .trainNumber(order.getTrainNumber())
+                            .ridingDate(order.getRidingDate())
+                            .startStation(order.getStartStation())
+                            .endStation(order.getEndStation())
+                            .departureTime(order.getDepartureTime())
+                            .arrivalTime(order.getArrivalTime())
+                            .status(order.getStatus())
+                            .orderTime(order.getOrderTime())
+                            .totalAmount(totalAmount)
+                            .passengerCount(items.size())
+                            .build();
+                })
+                .collect(Collectors.toList());
+
+        return PageResponse.from(orderPage, records);
     }
 }

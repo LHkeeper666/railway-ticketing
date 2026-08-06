@@ -7,9 +7,12 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.PayCallbackReqDTO
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.ChangeReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.RefundReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.WaitlistCreateReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.common.page.PageResponse;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderListReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderListRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.ChangeRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.RefundRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.WaitlistCreateRespDTO;
@@ -89,6 +92,14 @@ public class OrderController {
         } catch (ClientException e) {
             return Result.fail(e.getMessage());
         }
+    }
+
+    /**
+     * 查询当前用户订单列表（分页 + 筛选）
+     */
+    @GetMapping("/list")
+    public Result<PageResponse<OrderListRespDTO>> listOrders(OrderListReqDTO reqDTO) {
+        return Result.success(orderService.listUserOrders(reqDTO));
     }
 
     /**

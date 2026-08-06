@@ -2,12 +2,15 @@ package com.lhkeeper.ticketing.railway_ticketing.service;
 
 
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.lhkeeper.ticketing.railway_ticketing.common.page.PageResponse;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.FlashOrderMessageDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderListReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.PayCallbackReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderListRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
 
 /**
@@ -38,4 +41,7 @@ public interface OrderService extends IService<Order> {
 
     /** 取消订单，timeoutCancel=true 表示超时取消（仅允许 UNPAID 订单），false 为手动取消 */
     void cancelOrder(String orderSn, boolean timeoutCancel);
+
+    /** 分页查询当前用户的订单列表，支持按状态/日期/车次筛选 */
+    PageResponse<OrderListRespDTO> listUserOrders(OrderListReqDTO reqDTO);
 }

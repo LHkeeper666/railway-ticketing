@@ -49,6 +49,9 @@ jwt:
   secret: ${JWT_SECRET:railway-ticketing-secret-key-2026}
   expiration: ${JWT_EXPIRATION:86400}
 
+aes:
+  secret-key: ${AES_SECRET_KEY:railway-ticketing-aes-key-2026}
+
 mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

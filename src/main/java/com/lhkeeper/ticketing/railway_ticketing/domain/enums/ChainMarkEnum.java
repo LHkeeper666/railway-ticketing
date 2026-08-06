@@ -65,5 +65,13 @@ public enum ChainMarkEnum {
     /**
      * 乘客删除过滤器
      */
-    PASSENGER_DELETE;
+    PASSENGER_DELETE,
+
+    USER_UPDATE,
+
+    CHANGE_PASSWORD,
+
+    USER_DELETE,
+
+    ORDER_LIST;
 }
