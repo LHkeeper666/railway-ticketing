@@ -26,7 +26,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(jwtInterceptor)
                 .addPathPatterns("/**")
                 .excludePathPatterns("/auth/login", "/auth/register",
-                        "/ticket/**", "/order/pay/notify")
+                        "/ticket/**", "/order/pay/notify", "/mock-pay/**")
                 .order(1);
     }
 

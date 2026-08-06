@@ -52,6 +52,10 @@ jwt:
 aes:
   secret-key: ${AES_SECRET_KEY:railway-ticketing-aes-key-2026}
 
+payment:
+  mock:
+    secret: ${PAYMENT_MOCK_SECRET:mock-secret-key-2026}
+
 mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

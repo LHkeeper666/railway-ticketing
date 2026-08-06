@@ -13,6 +13,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreate
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderListRespDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PayCreateResult;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.ChangeRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.RefundRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.WaitlistCreateRespDTO;
@@ -70,14 +71,9 @@ public class OrderController {
      * 模拟支付
      */
     @PostMapping("/{orderSn}/pay")
-    public Result<?> payOrder(@PathVariable("orderSn") String orderSn) {
+    public Result<PayCreateResult> payOrder(@PathVariable("orderSn") String orderSn) {
         log.info("收到支付请求, orderSn={}", orderSn);
-        try {
-            orderService.payOrder(orderSn);
-            return Result.success();
-        } catch (ClientException e) {
-            return Result.fail(e.getMessage());
-        }
+        return Result.success(orderService.payOrder(orderSn));
     }
 
     /**

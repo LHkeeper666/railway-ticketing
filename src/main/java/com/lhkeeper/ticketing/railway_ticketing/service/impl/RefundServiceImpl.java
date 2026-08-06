@@ -8,6 +8,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.RefundRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
@@ -129,7 +130,7 @@ public class RefundServiceImpl implements RefundService {
                 .feeAmount(totalFee)
                 .totalAmount(totalTicketAmount)
                 .refundTicketCount(tickets.size())
-                .status("SUCCESS")
+                .status(PayStatusEnum.SUCCESS.getCode())
                 .reason(reqDTO.getReason())
                 .departureTime(order.getDepartureTime())
                 .build();
@@ -190,7 +191,7 @@ public class RefundServiceImpl implements RefundService {
                 payMapper.update(null,
                         Wrappers.lambdaUpdate(Pay.class)
                                 .eq(Pay::getOrderSn, orderSn)
-                                .set(Pay::getStatus, "REFUNDED")
+                                .set(Pay::getStatus, PayStatusEnum.REFUNDED.getCode())
                 );
             }
         }
@@ -229,7 +230,7 @@ public class RefundServiceImpl implements RefundService {
                 .refundAmount(refundAmount)
                 .feeAmount(totalFee)
                 .refundTicketCount(tickets.size())
-                .status("SUCCESS")
+                .status(PayStatusEnum.SUCCESS.getCode())
                 .build();
     }
 

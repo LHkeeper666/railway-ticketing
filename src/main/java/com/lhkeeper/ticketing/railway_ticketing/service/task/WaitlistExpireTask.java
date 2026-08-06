@@ -6,6 +6,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Pay;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Waitlist;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.WaitlistStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.OrderMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.PayMapper;
@@ -89,8 +90,8 @@ public class WaitlistExpireTask {
         payMapper.update(null,
                 Wrappers.lambdaUpdate(Pay.class)
                         .eq(Pay::getOrderSn, orderSn)
-                        .eq(Pay::getStatus, "FROZEN")
-                        .set(Pay::getStatus, "REFUNDED")
+                        .eq(Pay::getStatus, PayStatusEnum.FROZEN.getCode())
+                        .set(Pay::getStatus, PayStatusEnum.REFUNDED.getCode())
         );
 
         // ZREM Redis

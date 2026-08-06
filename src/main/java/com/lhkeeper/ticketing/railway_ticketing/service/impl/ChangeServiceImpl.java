@@ -9,6 +9,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderCreatePassengerD
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.ChangeRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
@@ -307,7 +308,7 @@ public class ChangeServiceImpl implements ChangeService {
                         .paySn(String.valueOf(snowflakeUtil.generateId()))
                         .orderSn(orderSn)
                         .totalAmount(priceDiff.add(fee))
-                        .status("PENDING")
+                        .status(PayStatusEnum.PENDING.getCode())
                         .build();
                 payMapper.insert(diffPay);
                 log.info("改签需补差价, orderSn={}, priceDiff={}, fee={}", orderSn, priceDiff, fee);

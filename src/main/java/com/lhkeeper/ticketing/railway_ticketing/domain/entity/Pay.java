@@ -90,7 +90,7 @@ public class Pay extends BaseEntity {
     private Integer payAmount;
 
     /**
-     * 支付状态
+     * 支付状态，使用 {@link com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum}
      */
     @TableField("status")
     private String status;

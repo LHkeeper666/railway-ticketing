@@ -103,7 +103,14 @@ AbstractChainContext<T>         — 运行时容器，实现 CommandLineRunner
   ├── AuthRegisterChainFilter   — 注册校验链
   ├── WaitlistCreateChainFilter — 候补创建校验链
   ├── OrderRefundChainFilter    — 退票校验链
-  └── OrderChangeChainFilter    — 改签校验链
+  ├── OrderChangeChainFilter    — 改签校验链
+  ├── PassengerCreateChainFilter — 乘车人创建校验链
+  ├── PassengerUpdateChainFilter — 乘车人更新校验链
+  ├── PassengerDeleteChainFilter — 乘车人删除校验链
+  ├── UserUpdateChainFilter     — 用户资料修改校验链
+  ├── ChangePasswordChainFilter — 修改密码校验链
+  ├── UserDeleteChainFilter     — 注销账号校验链
+  └── OrderListChainFilter      — 订单列表查询校验链
 ```
 
 #### 注册机制
@@ -126,7 +133,8 @@ AbstractChainContext<T>         — 运行时容器，实现 CommandLineRunner
 | `ORDER_PAY` | `OrderPayParamNotNullChainHandler` | orderSn 非空 |
 | `ORDER_PAY` | `OrderPayParamValidateChainHandler` | 订单状态校验 |
 | `ORDER_CANCEL` | `OrderCancelParamNotNullChainHandler` | orderSn 非空 |
-| `PAY_NOTIFY` | `PayNotifyParamNotNullChainHandler` | 回调参数校验 |
+| `PAY_NOTIFY` | `PayNotifyParamNotNullChainHandler` | 回调参数非空校验 |
+| `PAY_NOTIFY` | `PayNotifySignVerifyChainHandler` | 回调签名校验（order=3，按渠道路由策略验签） |
 | `AUTH_LOGIN` | `AuthLoginParamNotNullChainHandler` | 手机号/密码非空 |
 | `AUTH_REGISTER` | `AuthRegisterParamNotNullChainHandler` | 注册参数非空 |
 | `WAITLIST_CREATE` | `WaitlistCreateParamNotNullChainHandler` | 候补参数非空校验 |
@@ -135,6 +143,10 @@ AbstractChainContext<T>         — 运行时容器，实现 CommandLineRunner
 | `ORDER_REFUND` | `OrderRefundStatusChainHandler` | 订单须为PAID、用户归属校验 |
 | `ORDER_CHANGE` | `OrderChangeParamNotNullChainHandler` | 订单号+新车次信息非空 |
 | `ORDER_CHANGE` | `OrderChangeStatusChainHandler` | 订单须为PAID、用户归属校验 |
+| `USER_UPDATE` | `UserUpdateParamNotNullChainHandler` | 更新资料请求参数非空校验 |
+| `CHANGE_PASSWORD` | `ChangePasswordParamNotNullChainHandler` | 旧密码/新密码/确认密码非空 + 新密码一致性校验 |
+| `USER_DELETE` | `UserDeleteParamNotNullChainHandler` | 注销密码非空校验 |
+| `ORDER_LIST` | `OrderListParamVerifyChainHandler` | status 枚举范围/分页 size≤50 校验 |
 
 ---
 
@@ -172,9 +184,41 @@ POST /auth/register
   → JwtInterceptor.afterCompletion() → UserContext.clear()
 ```
 
-**拦截路径**: `/**` (**排除** `/auth/login`, `/auth/register`)
+**拦截路径**: `/**` (**排除** `/auth/login`, `/auth/register`, `/ticket/**`, `/order/pay/notify`, `/mock-pay/**`)
 
 **JWT 配置**: HS256 签名，密钥和过期时间通过 `jwt.secret` / `jwt.expiration` 配置（默认 86400s）。
+
+#### 用户中心
+
+在认证基础上，提供个人信息管理功能：
+
+```
+GET /user/me
+  → UserController.profile()
+  → UserContext.get().getUserId()
+  → userMapper.selectById(userId)
+  → 身份证号 AES 解密 → 脱敏(前3后4)
+  → 手机号脱敏(前3后4)
+  → UserRespDTO (不含 password)
+
+PUT /user/update
+  → Chain: UserUpdateChainFilter (参数非空)
+  → BeanUtils.copyProperties + idCard 加密
+  → userMapper.updateById()
+
+POST /user/change-password
+  → Chain: ChangePasswordChainFilter (旧密码/新密码/确认密码非空 + 一致性)
+  → 校验旧密码: passwordEncoder.matches(oldPwd, stored)
+  → 新密码 BCrypt 编码后更新
+
+POST /user/delete
+  → Chain: UserDeleteChainFilter (密码非空)
+  → 校验密码确认身份
+  → LambdaUpdateWrapper 显式设 delFlag=1 + deletionTime
+  → 注意: @TableLogic + updateById 存在兼容问题，改用 Wrappers.lambdaUpdate()
+```
+
+**身份证加密**: 使用 JDK 自带 `javax.crypto.Cipher`（AES/CBC/PKCS5Padding），密钥通过 `aes.secret-key` 配置注入。解密失败时自动降级返回原文（兼容存量明文数据）。
 
 ---
 
@@ -324,6 +368,17 @@ t_passenger (乘车人，独立于用户)
 | 候补提交 | WAITLIST | — | FROZEN |
 | 候补兑现 | UNPAID | UNPAID | SUCCESS |
 | 候补取消/过期 | CANCELED | — | REFUNDED |
+
+#### 订单列表查询
+
+`GET /order/list` 支持按用户分页查询订单，通过 MyBatis-Plus 分页插件（`PaginationInnerInterceptor`）生成 LIMIT 子句。
+
+- **筛选条件**: status（状态）、startDate/endDate（日期范围）、trainNumber（车次模糊匹配）
+- **排序**: orderTime DESC，确保最新订单在前
+- **分页限制**: size 最大 50，防刷
+- **性能**: `t_order` 表建 `(user_id, status, order_time)` 联合索引
+- **微服务化预备**: Order 表已冗余 trainNumber/startStation/endStation，列表查询不跨服务
+- **响应**: `PageResponse<OrderListRespDTO>` — 通用分页结构，含 summary（totalAmount 汇总、passengerCount 计数），不含完整 OrderItem 详情
 
 ---
 
@@ -587,6 +642,103 @@ lock(lockFirst) → lock(lockSecond)
 
 ---
 
+### 3.10 支付模块
+
+支付模块采用**策略模式**设计，将支付渠道差异封装到 `PaymentStrategy` 接口中，通过 `PaymentService` 门面统一对外。从 `OrderServiceImpl` 剥离独立的支付服务层，降低耦合度。
+
+#### 架构层次
+
+```
+OrderController  ──→  OrderService.payOrder()    ← 责任链 ORDER_PAY 参数校验
+                           │
+                           ▼
+                    PaymentService                 ← 门面，渠道路由
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+        MockStrategy  AlipayStrategy  WechatStrategy   ← 策略实现
+              │
+              ▼
+        MockPayController                            ← 模拟支付页面
+```
+
+#### 策略接口
+
+```java
+public interface PaymentStrategy {
+    String getChannel();                          // 渠道标识: MOCK / ALIPAY / WECHAT
+    PayCreateResult createPayment(PayCreateRequest req);
+    boolean verifySignature(PayCallbackReqDTO callback);
+    String queryStatus(String orderSn);
+    boolean refund(String orderSn, Integer amount);
+}
+```
+
+`PaymentStrategy` 由 Spring 自动收集（`List<PaymentStrategy>` 注入），按 `getChannel()` 路由。新增支付渠道只需添加一个策略实现类，无需修改门面代码。
+
+#### 支付流程
+
+```
+POST /order/{orderSn}/pay
+  → 责任链 ORDER_PAY 参数校验
+  → OrderServiceImpl.payOrder() → PaymentService.createPayment()
+  → 按 channel 路由到 PaymentStrategy.createPayment()
+  → MockPaymentStrategy:
+      1. 查重防重复支付 (uk_order_sn 兜底)
+      2. 计算订单总金额
+      3. 生成 paySn
+      4. HMAC-SHA256(paySn|orderSn|totalAmount|status) 生成签名
+      5. 写 t_pay (PENDING, channel=MOCK, tradeNo=签名)
+      6. 返回 PayCreateResult { paySn, payUrl: "/mock-pay/{paySn}", sign }
+
+POST /order/pay/notify  (回调)
+  → 责任链 PAY_NOTIFY:
+      order=0: PayNotifyParamNotNullChainHandler    (参数非空)
+      order=3: PayNotifySignVerifyChainHandler      (签名校验)
+  → PaymentService.handleCallback()
+  → CAS: UPDATE t_order SET status=PAID WHERE status=UNPAID
+  → 更新 OrderItem/Ticket/Pay 状态
+  → CAS 失败时: 已 PAID→幂等, 已 CANCELED→记录待退款
+
+POST /mock-pay/{paySn}/pay  (模拟支付确认)
+  → MockPayController 构造 PayCallbackReqDTO (含签名)
+  → PaymentService.handleCallback()
+  → 走完整回调链路，验证签名校验 + CAS 状态机
+```
+
+#### HMAC-SHA256 签名机制
+
+Mock 策略使用 HMAC-SHA256 对称签名，密钥通过 `payment.mock.secret` 配置。签名规则：
+
+```
+sign = Base64(HMAC-SHA256(paySn + "|" + orderSn + "|" + totalAmount + "|" + status, secretKey))
+```
+
+`createPayment` 时将签名存入 `t_pay.trade_no`，`verifySignature` 时从 Pay 表读取 `paySn` 后重新计算比对。签名校验在责任链中统一执行（`PayNotifySignVerifyChainHandler`），不通过直接拒绝，不进入业务逻辑。
+
+#### Pay 状态枚举
+
+```java
+public enum PayStatusEnum {
+    PENDING("PENDING"),           // 待支付
+    SUCCESS("SUCCESS"),           // 支付成功
+    FAIL("FAIL"),                 // 支付失败
+    FROZEN("FROZEN"),             // 预授权冻结（候补）
+    PENDING_REFUND("PENDING_REFUND"), // 待退款
+    REFUNDED("REFUNDED");         // 已退款
+}
+```
+
+所有 Pay 状态引用统一使用枚举，替换原先散落各处的硬编码字符串。枚举值保持与数据库存储格式一致，不影响已有数据。
+
+#### 与 OrderService 的关系
+
+`OrderServiceImpl` 不再直接操作 Pay 表。支付创建 (`payOrder`)、回调处理 (`handlePayNotify`)、Pay 记录读写 (`saveOrUpdatePay`) 全部移至 `PaymentServiceImpl`。`OrderServiceImpl` 仅保留 `ORDER_PAY` 责任链调用，随后委托 `PaymentService.createPayment()`。
+
+`cancelOrder` 中更新 Pay → REFUNDED 的操作使用 `PayStatusEnum.REFUNDED.getCode()`，不再使用字符串硬编码。
+
+---
+
 ## 4. API 接口
 
 | 方法 | 路径 | 说明 | 认证 |
@@ -595,15 +747,22 @@ lock(lockFirst) → lock(lockSecond)
 | POST | `/auth/register` | 用户注册 | 否 |
 | GET | `/ticket/query` | 余票查询（分页） | 否 |
 | POST | `/order/create` | 创建订单 | 是 |
-| POST | `/order/{orderSn}/pay` | 模拟支付 | 是 |
+| POST | `/order/{orderSn}/pay` | 模拟支付（返回 `PayCreateResult` 含支付链接） | 是 |
 | GET | `/order/{orderSn}` | 订单详情（含 ticketId） | 是 |
 | POST | `/order/{orderSn}/cancel` | 取消订单 | 是 |
 | POST | `/order/{orderSn}/refund` | 退票（支持部分退票） | 是 |
 | POST | `/order/{orderSn}/change` | 改签（跨车次/同车次） | 是 |
-| POST | `/order/pay-notify` | 支付结果回调 | 否 |
+| POST | `/order/pay/notify` | 支付结果回调（验签 + CAS 状态更新） | 否 |
+| GET | `/mock-pay/{paySn}` | 模拟支付页面（订单金额、支付确认） | 否 |
+| POST | `/mock-pay/{paySn}/pay` | 模拟支付确认（走完整回调链路） | 否 |
 | POST | `/order/waitlist-create` | 提交候补订单 | 是 |
 | GET | `/order/waitlist/{waitlistSn}` | 查询候补状态 | 是 |
 | POST | `/order/waitlist/{waitlistSn}/cancel` | 取消候补 | 是 |
+| GET | `/user/me` | 查看个人信息（脱敏） | 是 |
+| PUT | `/user/update` | 修改个人资料（idCard 加密存储） | 是 |
+| POST | `/user/change-password` | 修改密码 | 是 |
+| POST | `/user/delete` | 注销账号（软删除） | 是 |
+| GET | `/order/list` | 订单列表分页查询（支持状态/日期/车次筛选） | 是 |
 
 ---
 
@@ -646,3 +805,5 @@ ServiceException ── HTTP 500 — 服务端错误（系统繁忙、库存不�
 | 参数校验 | 统一放责任链，Service 层不写内联 if-null |
 | 缓存 TTL | 常量定义在 `RedisConstant`，无硬编码 |
 | 锁释放 | 统一在 finally 块 delete |
+| 分页响应 | `PageResponse<T>` (common/page/) 统一封装，提供 `from(IPage, records)` 工厂方法 |
+| 敏感数据 | 身份证号 AES 加密存储（`AesUtil`），响应中脱敏展示；密码 BCrypt 不可逆加密 |

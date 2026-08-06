@@ -100,7 +100,7 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
                 .paySn(String.valueOf(snowflakeUtil.generateId()))
                 .orderSn(orderSn)
                 .totalAmount(totalAmount)
-                .status("FROZEN")
+                .status(PayStatusEnum.FROZEN.getCode())
                 .build();
         payMapper.insert(pay);
 
@@ -348,8 +348,8 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
         payMapper.update(null,
                 Wrappers.lambdaUpdate(Pay.class)
                         .eq(Pay::getOrderSn, orderSn)
-                        .eq(Pay::getStatus, "FROZEN")
-                        .set(Pay::getStatus, "SUCCESS")
+                        .eq(Pay::getStatus, PayStatusEnum.FROZEN.getCode())
+                        .set(Pay::getStatus, PayStatusEnum.SUCCESS.getCode())
         );
 
         // ZREM Redis
@@ -410,8 +410,8 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
                 payMapper.update(null,
                         Wrappers.lambdaUpdate(Pay.class)
                                 .eq(Pay::getOrderSn, orderSn)
-                                .eq(Pay::getStatus, "FROZEN")
-                                .set(Pay::getStatus, "REFUNDED")
+                                .eq(Pay::getStatus, PayStatusEnum.FROZEN.getCode())
+                                .set(Pay::getStatus, PayStatusEnum.REFUNDED.getCode())
                 );
 
                 log.info("候补已取消(WAITING快速路径), waitlistSn={}", waitlistSn);
@@ -544,8 +544,8 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
         payMapper.update(null,
                 Wrappers.lambdaUpdate(Pay.class)
                         .eq(Pay::getOrderSn, orderSn)
-                        .eq(Pay::getStatus, "FROZEN")
-                        .set(Pay::getStatus, "REFUNDED")
+                        .eq(Pay::getStatus, PayStatusEnum.FROZEN.getCode())
+                        .set(Pay::getStatus, PayStatusEnum.REFUNDED.getCode())
         );
 
         log.info("候补清理完成(WAITLIST快速路径), orderSn={}", orderSn);
@@ -575,8 +575,8 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
         payMapper.update(null,
                 Wrappers.lambdaUpdate(Pay.class)
                         .eq(Pay::getOrderSn, orderSn)
-                        .eq(Pay::getStatus, "FROZEN")
-                        .set(Pay::getStatus, "REFUNDED")
+                        .eq(Pay::getStatus, PayStatusEnum.FROZEN.getCode())
+                        .set(Pay::getStatus, PayStatusEnum.REFUNDED.getCode())
         );
 
         // ZREM Redis

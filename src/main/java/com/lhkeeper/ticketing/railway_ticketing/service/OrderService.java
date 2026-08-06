@@ -11,6 +11,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreate
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderListRespDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PayCreateResult;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
 
 /**
@@ -27,8 +28,8 @@ public interface OrderService extends IService<Order> {
     /** MQ 消费端处理抢票选座逻辑 */
     void processFlashOrder(FlashOrderMessageDTO msg);
 
-    /** 模拟支付，生成支付记录 */
-    void payOrder(String orderSn);
+    /** 模拟支付，委托 PaymentService 创建支付并返回支付信息 */
+    PayCreateResult payOrder(String orderSn);
 
     /** 处理第三方支付回调通知 */
     void handlePayNotify(PayCallbackReqDTO reqDTO);

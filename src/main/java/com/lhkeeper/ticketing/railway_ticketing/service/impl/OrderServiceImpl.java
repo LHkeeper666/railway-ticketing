@@ -17,21 +17,25 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.OrderItemDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderCreateReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.OrderListReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.PayCallbackReqDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.PayCreateRequest;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.FlashOrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderCreateRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderDetailRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderItemDetailDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.OrderListRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PayInfoDTO;
+import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PayCreateResult;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
 import com.lhkeeper.ticketing.railway_ticketing.service.OrderService;
+import com.lhkeeper.ticketing.railway_ticketing.service.PaymentService;
 import com.lhkeeper.ticketing.railway_ticketing.service.TrainStationService;
 import com.lhkeeper.ticketing.railway_ticketing.service.WaitlistService;
 import com.lhkeeper.ticketing.railway_ticketing.service.handler.filter.AbstractChainContext;
@@ -85,8 +89,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final TicketMapper ticketMapper;
     private final AbstractChainContext<OrderCreateReqDTO> orderCreateChainContext;
     private final AbstractChainContext<String> orderPayChainContext;
-    private final AbstractChainContext<PayCallbackReqDTO> payNotifyChainContext;
     private final AbstractChainContext<String> orderCancelChainContext;
+    private final PaymentService paymentService;
     private final AbstractChainContext<OrderListReqDTO> orderListChainContext;
     private final SeatMapper seatMapper;
     private final SnowflakeUtil snowflakeUtil;
@@ -409,171 +413,28 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     }
 
     /**
-     * 模拟支付：责任链校验 → 检查 Pay 是否已存在 → 计算订单总金额 → 生成 Pay 记录
+     * 模拟支付：责任链校验 → 委托 PaymentService 创建支付
      */
     @Transactional(rollbackFor = Throwable.class)
     @Override
-    public void payOrder(String orderSn) {
+    public PayCreateResult payOrder(String orderSn) {
         orderPayChainContext.handler(ChainMarkEnum.ORDER_PAY.name(), orderSn);
-
         log.info("开始支付, orderSn={}", orderSn);
 
-        // 检查是否已有支付记录（uk_order_sn 唯一约束兜底防并发）
-        Pay existing = payMapper.selectOne(
-                Wrappers.lambdaQuery(Pay.class)
-                        .eq(Pay::getOrderSn, orderSn)
-        );
-        if (existing != null) {
-            throw new ClientException("订单已有支付记录，请勿重复支付");
-        }
-
-        List<OrderItem> orderItems = orderItemMapper.selectList(
-                Wrappers.lambdaQuery(OrderItem.class)
-                        .eq(OrderItem::getOrderSn, orderSn)
-        );
-        BigDecimal totalAmount = BigDecimal.ZERO;
-        for (OrderItem orderItem : orderItems) {
-            totalAmount = totalAmount.add(orderItem.getAmount());
-        }
-
-        Pay pay = Pay.builder()
-                .paySn(String.valueOf(snowflakeUtil.generateId()))
+        PayCreateRequest request = PayCreateRequest.builder()
                 .orderSn(orderSn)
-                .totalAmount(totalAmount)
-                .status("PENDING")
+                .channel("MOCK")
                 .build();
-        try {
-            payMapper.insert(pay);
-        } catch (org.springframework.dao.DuplicateKeyException e) {
-            throw new ClientException("订单已有支付记录，请勿重复支付");
-        }
-        log.info("支付记录已创建, orderSn={}, paySn={}, amount={}", orderSn, pay.getPaySn(), totalAmount);
+        return paymentService.createPayment(request);
     }
 
     /**
-     * 处理支付回调：责任链校验 → CAS 原子状态转换 → 更新 OrderItem/Ticket/Pay。
-     * 用 CAS（UPDATE WHERE status=UNPAID）替代 FOR UPDATE，与 cancelOrder 互斥。
+     * 处理支付回调：委托 PaymentService 验签 + CAS 状态更新
      */
     @Transactional(rollbackFor = Throwable.class)
     @Override
     public void handlePayNotify(PayCallbackReqDTO reqDTO) {
-        payNotifyChainContext.handler(ChainMarkEnum.PAY_NOTIFY.name(), reqDTO);
-
-        log.info("收到支付回调, orderSn={}, status={}, tradeNo={}",
-                reqDTO.getOrderSn(), reqDTO.getStatus(), reqDTO.getTradeNo());
-
-        String orderSn = reqDTO.getOrderSn();
-        boolean success = "SUCCESS".equalsIgnoreCase(reqDTO.getStatus());
-
-        if (!success) {
-            // 支付失败：直接记录 Pay，不争抢状态
-            saveOrUpdatePay(reqDTO, "FAIL");
-            log.warn("支付失败, orderSn={}", orderSn);
-            return;
-        }
-
-        // CAS: UNPAID → PAID
-        int updated = orderMapper.update(null,
-                Wrappers.lambdaUpdate(Order.class)
-                        .eq(Order::getOrderSn, orderSn)
-                        .eq(Order::getStatus, OrderStatusEnum.UNPAID.getCode())
-                        .set(Order::getStatus, OrderStatusEnum.PAID.getCode())
-                        .set(Order::getPayTime, LocalDateTime.now())
-        );
-
-        if (updated > 0) {
-            // CAS 成功 → 更新 OrderItem/Ticket/Pay
-            orderItemMapper.update(null,
-                    Wrappers.lambdaUpdate(OrderItem.class)
-                            .eq(OrderItem::getOrderSn, orderSn)
-                            .set(OrderItem::getStatus, TicketStatusEnum.PAID.getCode())
-            );
-            ticketMapper.update(null,
-                    Wrappers.lambdaUpdate(Ticket.class)
-                            .eq(Ticket::getOrderSn, orderSn)
-                            .set(Ticket::getTicketStatus, TicketStatusEnum.PAID.getCode())
-            );
-            saveOrUpdatePay(reqDTO, "SUCCESS");
-            log.info("支付成功, orderSn={}", orderSn);
-            return;
-        }
-
-        // CAS 失败 → 重新读取当前状态
-        Order order = orderMapper.selectOne(
-                Wrappers.lambdaQuery(Order.class)
-                        .eq(Order::getOrderSn, orderSn)
-        );
-        if (order == null) {
-            log.warn("支付回调-订单不存在, orderSn={}", orderSn);
-            throw new ClientException("订单不存在");
-        }
-
-        Integer currentStatus = order.getStatus();
-        if (OrderStatusEnum.PAID.getCode().equals(currentStatus)) {
-            // 已是 PAID → 幂等，补充更新 Pay 记录
-            log.info("支付回调-订单已支付（幂等）, orderSn={}", orderSn);
-            saveOrUpdatePay(reqDTO, "SUCCESS");
-            return;
-        }
-
-        if (OrderStatusEnum.CANCELED.getCode().equals(currentStatus)) {
-            // 订单已被取消，但用户已付款 → 记录退款
-            log.warn("支付回调-订单已取消，记录待退款, orderSn={}", orderSn);
-            saveOrUpdatePay(reqDTO, "PENDING_REFUND");
-            return;
-        }
-
-        // 其他意外状态
-        log.warn("支付回调-订单状态异常, orderSn={}, status={}", orderSn, currentStatus);
-        throw new ClientException("订单状态异常");
-    }
-
-    private void saveOrUpdatePay(PayCallbackReqDTO reqDTO, String status) {
-        Pay pay = payMapper.selectOne(
-                Wrappers.lambdaQuery(Pay.class)
-                        .eq(Pay::getOrderSn, reqDTO.getOrderSn())
-        );
-        if (pay != null) {
-            pay.setTradeNo(reqDTO.getTradeNo());
-            pay.setChannel(reqDTO.getChannel());
-            pay.setStatus(status);
-            pay.setGmtPayment("SUCCESS".equals(status) ? LocalDateTime.now() : pay.getGmtPayment());
-            if (reqDTO.getTotalAmount() != null) {
-                pay.setTotalAmount(reqDTO.getTotalAmount());
-            }
-            payMapper.updateById(pay);
-            return;
-        }
-        // INSERT 优先，uk_order_sn 唯一约束兜底防并发重复
-        try {
-            Pay newPay = Pay.builder()
-                    .paySn(String.valueOf(snowflakeUtil.generateId()))
-                    .orderSn(reqDTO.getOrderSn())
-                    .tradeNo(reqDTO.getTradeNo())
-                    .channel(reqDTO.getChannel())
-                    .totalAmount(reqDTO.getTotalAmount())
-                    .status(status)
-                    .gmtPayment("SUCCESS".equals(status) ? LocalDateTime.now() : null)
-                    .build();
-            payMapper.insert(newPay);
-        } catch (org.springframework.dao.DuplicateKeyException e) {
-            log.info("支付记录已存在（并发插入），改为更新, orderSn={}", reqDTO.getOrderSn());
-            payMapper.update(null,
-                    Wrappers.lambdaUpdate(Pay.class)
-                            .eq(Pay::getOrderSn, reqDTO.getOrderSn())
-                            .set(Pay::getTradeNo, reqDTO.getTradeNo())
-                            .set(Pay::getChannel, reqDTO.getChannel())
-                            .set(Pay::getStatus, status)
-                            .set(Pay::getGmtPayment, "SUCCESS".equals(status) ? LocalDateTime.now() : null)
-            );
-            if (reqDTO.getTotalAmount() != null) {
-                payMapper.update(null,
-                        Wrappers.lambdaUpdate(Pay.class)
-                                .eq(Pay::getOrderSn, reqDTO.getOrderSn())
-                                .set(Pay::getTotalAmount, reqDTO.getTotalAmount())
-                );
-            }
-        }
+        paymentService.handleCallback(reqDTO);
     }
 
     /**
@@ -809,7 +670,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             payMapper.update(null,
                     Wrappers.lambdaUpdate(Pay.class)
                             .eq(Pay::getOrderSn, orderSn)
-                            .set(Pay::getStatus, "REFUNDED")
+                            .set(Pay::getStatus, PayStatusEnum.REFUNDED.getCode())
             );
         }
 

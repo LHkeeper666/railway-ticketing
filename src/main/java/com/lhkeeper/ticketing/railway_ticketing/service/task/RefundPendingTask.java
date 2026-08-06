@@ -5,6 +5,7 @@ import com.lhkeeper.ticketing.railway_ticketing.common.constant.RedisConstant;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Pay;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.OrderMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.PayMapper;
 import com.lhkeeper.ticketing.railway_ticketing.util.DistributedLock;
@@ -44,7 +45,7 @@ public class RefundPendingTask {
             while (true) {
                 List<Pay> pendingRefunds = payMapper.selectList(
                         Wrappers.lambdaQuery(Pay.class)
-                                .eq(Pay::getStatus, "PENDING_REFUND")
+                                .eq(Pay::getStatus, PayStatusEnum.PENDING_REFUND.getCode())
                                 .last("LIMIT " + BATCH_SIZE)
                 );
                 if (pendingRefunds.isEmpty()) {
@@ -92,8 +93,8 @@ public class RefundPendingTask {
         int updated = payMapper.update(null,
                 Wrappers.lambdaUpdate(Pay.class)
                         .eq(Pay::getPaySn, pay.getPaySn())
-                        .eq(Pay::getStatus, "PENDING_REFUND")
-                        .set(Pay::getStatus, "REFUNDED")
+                        .eq(Pay::getStatus, PayStatusEnum.PENDING_REFUND.getCode())
+                        .set(Pay::getStatus, PayStatusEnum.REFUNDED.getCode())
         );
         if (updated > 0) {
             log.info("退款完成, paySn={}, orderSn={}", pay.getPaySn(), pay.getOrderSn());
