@@ -25,14 +25,15 @@ public class JwtUtil {
         this.expiration = expiration;
     }
 
-    /** 生成 JWT Token，包含 userId、username、phone 声明 */
-    public String generateToken(Long userId, String username, String phone) {
+    /** 生成 JWT Token，包含 userId、username、phone、role 声明 */
+    public String generateToken(Long userId, String username, String phone, Integer role) {
         Date now = new Date();
         Date exp = new Date(now.getTime() + expiration * 1000);
         return Jwts.builder()
                 .subject(String.valueOf(userId))
                 .claim("username", username)
                 .claim("phone", phone)
+                .claim("role", role)
                 .issuedAt(now)
                 .expiration(exp)
                 .signWith(key)

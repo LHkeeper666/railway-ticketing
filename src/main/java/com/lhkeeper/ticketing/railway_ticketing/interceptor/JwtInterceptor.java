@@ -32,10 +32,12 @@ public class JwtInterceptor implements HandlerInterceptor {
         }
         try {
             Claims claims = jwtUtil.parseToken(token);
+            Integer role = claims.get("role", Integer.class);
             UserInfo userInfo = new UserInfo(
                     Long.parseLong(claims.getSubject()),
                     claims.get("username", String.class),
-                    claims.get("phone", String.class)
+                    claims.get("phone", String.class),
+                    role != null ? role : 0
             );
             UserContext.set(userInfo);
         } catch (Exception e) {

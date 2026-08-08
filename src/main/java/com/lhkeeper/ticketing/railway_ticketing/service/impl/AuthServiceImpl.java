@@ -45,7 +45,11 @@ public class AuthServiceImpl implements AuthService {
         if (!passwordEncoder.matches(password, user.getPassword())) {
             throw new ClientException("密码错误");
         }
-        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), user.getPhone());
+        if (user.getStatus() != null && user.getStatus() == 0) {
+            throw new ClientException("账号已被禁用");
+        }
+        Integer role = user.getRole() != null ? user.getRole() : 0;
+        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), user.getPhone(), role);
         return LoginRespDTO.builder()
                 .token(token)
                 .userId(user.getId())

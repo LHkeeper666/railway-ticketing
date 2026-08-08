@@ -13,4 +13,5 @@ public class UserInfo {
     private Long userId;
     private String username;
     private String phone;
+    private Integer role;
 }

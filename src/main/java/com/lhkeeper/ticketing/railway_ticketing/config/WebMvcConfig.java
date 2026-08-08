@@ -1,5 +1,6 @@
 package com.lhkeeper.ticketing.railway_ticketing.config;
 
+import com.lhkeeper.ticketing.railway_ticketing.interceptor.AdminInterceptor;
 import com.lhkeeper.ticketing.railway_ticketing.interceptor.JwtInterceptor;
 import com.lhkeeper.ticketing.railway_ticketing.interceptor.RateLimitInterceptor;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     private final JwtInterceptor jwtInterceptor;
     private final RateLimitInterceptor rateLimitInterceptor;
+    private final AdminInterceptor adminInterceptor;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
@@ -28,6 +30,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns("/auth/login", "/auth/register",
                         "/ticket/**", "/order/pay/notify", "/mock-pay/**")
                 .order(1);
+        registry.addInterceptor(adminInterceptor)
+                .addPathPatterns("/admin/**")
+                .order(2);
     }
 
     @Override

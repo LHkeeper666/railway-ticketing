@@ -22,6 +22,7 @@ src/main/java/com/lhkeeper/ticketing/railway_ticketing/
 ├── RailwayTicketingApplication.java    # 启动入口 @MapperScan
 ├── common/
 │   ├── annotation/RateLimit.java       # 令牌桶限流注解 (capacity, refillRate)
+│   ├── annotation/AdminRequired.java   # 管理员权限注解 (标注 /admin/** Controller)
 │   ├── constant/RedisConstant.java     # Redis key 模板、缓存 TTL、分布式锁、限流常量
 │   ├── mybatis/MyMetaObjectHandler.java # 自动填充(createTime/updateTime/delFlag)
 │   ├── page/PageRequest.java           # 分页请求基类 (current, size)
@@ -37,8 +38,16 @@ src/main/java/com/lhkeeper/ticketing/railway_ticketing/
 ├── controller/
 │   ├── AuthController.java             # /auth/login, /auth/register
 │   ├── TicketController.java           # /ticket/query 余票查询 (@RateLimit), /ticket/health
-│   └── OrderController.java            # /order/create, /order/flash-create, /order/{sn}/pay,
-│                                       #   /order/pay/notify, /order/{sn} 详情, /order/{sn}/cancel
+│   ├── OrderController.java            # /order/create, /order/flash-create, /order/{sn}/pay,
+│   │                                   #   /order/pay/notify, /order/{sn} 详情, /order/{sn}/cancel
+│   ├── PassengerController.java        # /passenger CRUD
+│   ├── UserController.java             # /user/me 查看/修改资料、修改密码、注销
+│   └── admin/
+│       ├── AdminRegionController.java   # /admin/region 区域 CRUD
+│       ├── AdminStationController.java  # /admin/station 站点 CRUD
+│       ├── AdminTrainController.java    # /admin/train 列车 CRUD + 路线配置 + 克隆 + 晚点
+│       ├── AdminOrderController.java    # /admin/order 订单查询 + 手动取消/退票
+│       └── AdminUserController.java     # /admin/user 用户查询 + 启用/禁用
 ├── domain/
 │   ├── dto/req/                        # 请求 DTO
 │   ├── dto/resp/                       # 响应 DTO
@@ -51,7 +60,8 @@ src/main/java/com/lhkeeper/ticketing/railway_ticketing/
 │   └── GlobalExceptionHandler.java     # @RestControllerAdvice 全局处理
 ├── interceptor/
 │   ├── JwtInterceptor.java             # 从 Authorization Bearer 提取 JWT，设置 UserContext
-│   └── RateLimitInterceptor.java       # 令牌桶限流 (Redis Lua 脚本)
+│   ├── RateLimitInterceptor.java       # 令牌桶限流 (Redis Lua 脚本)
+│   └── AdminInterceptor.java           # 管理员权限校验 (order=2, 拦截 /admin/**)
 ├── mapper/                             # Mapper 接口 (extends BaseMapper)
 ├── service/
 │   ├── AuthService.java / impl/AuthServiceImpl.java
@@ -223,6 +233,60 @@ public Result<TicketPageQueryRespDTO> query(TicketPageQueryReqDTO req) {
   "data": {...},
   "requestId": null
 }
+```
+
+### 管理后台 (Admin API)
+
+- 角色体系: `t_user.role` (0=用户, 1=管理员) + `t_user.status` (0=禁用, 1=启用)
+- JWT 增加 `role` claim，`AdminInterceptor` (order=2) 拦截 `/admin/**` 校验 role=1
+- 路线变更安全: 有活跃订单时冻结 (`sale_status=1`) + 克隆列车工作流，防止 seat_bitmap 位图错乱
+- 新增辅助类: `TrainStationChangeChecker` (变更检测)、`TrainStationRelationGenerator` (关系自动生成)
+- `t_seat.price` 列标记废弃，票价以 `t_train_station_price` 为唯一来源
+
+接口汇总:
+```
+POST   /auth/login                    # 登录 (增加 role claim、禁用校验)
+# 区域管理
+GET    /admin/region/page             # 分页列表
+GET    /admin/region/{id}             # 详情
+POST   /admin/region                  # 新增 (清除 Redis region 缓存)
+PUT    /admin/region/{id}             # 修改
+DELETE /admin/region/{id}             # 删除 (检查引用)
+# 站点管理
+GET    /admin/station/page            # 分页列表
+GET    /admin/station/{id}            # 详情
+POST   /admin/station                 # 新增
+PUT    /admin/station/{id}            # 修改
+DELETE /admin/station/{id}            # 删除 (检查引用)
+# 列车管理
+GET    /admin/train/page              # 分页列表 (按车次号/类型筛选)
+GET    /admin/train/{id}              # 基本信息
+GET    /admin/train/{id}/stations     # 路线详情
+POST   /admin/train                   # 新增 (sale_status=0)
+PUT    /admin/train/{id}              # 修改元数据 (活跃订单时拒绝对时间变更)
+DELETE /admin/train/{id}              # 删除 (无订单物理删，有订单软删)
+PUT    /admin/train/{id}/stations     # 设置路线 (无订单全量替换)
+POST   /admin/train/{id}/stations/append  # 末尾追加
+POST   /admin/train/{id}/stations/insert  # 中间插入 (有活跃订单拒绝)
+DELETE /admin/train/{id}/stations/{tsId}  # 删除停站
+POST   /admin/train/{id}/clone        # 克隆列车 (冻结旧车)
+GET    /admin/train/{id}/carriages    # 车厢列表
+POST   /admin/train/{id}/carriage     # 新增车厢 (自动生成座位)
+DELETE /admin/train/{id}/carriage/{cid}   # 删除车厢及座位
+GET    /admin/train/{id}/seats        # 座位列表 (按车厢分组)
+DELETE /admin/train/{id}/seat/{sid}   # 删除座位
+GET    /admin/train/{id}/prices       # 票价列表
+PUT    /admin/train/{id}/prices/batch # 批量设置票价 (upsert)
+POST   /admin/train/{id}/delay        # 运营晚点 (更新所有关联时间)
+# 订单管理
+GET    /admin/order/page              # 分页列表 (按状态/车次/用户/日期筛选)
+GET    /admin/order/{orderSn}         # 详情
+POST   /admin/order/{orderSn}/cancel  # 手动取消
+POST   /admin/order/{orderSn}/refund  # 手动退票
+# 用户管理
+GET    /admin/user/page               # 分页列表 (关键字/role 筛选)
+GET    /admin/user/{id}               # 详情 (密码不返回，身份证脱敏)
+PUT    /admin/user/{id}/status        # 启用/禁用
 ```
 
 ## 启动方式

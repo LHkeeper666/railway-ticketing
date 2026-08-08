@@ -285,6 +285,8 @@ CREATE TABLE `t_user`
     `verify_status` int(3) DEFAULT NULL COMMENT '审核状态',
     `post_code`     varchar(64) COLLATE utf8mb4_unicode_ci   DEFAULT NULL COMMENT '邮编',
     `address`       varchar(1024) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '地址',
+    `role`          tinyint(1) DEFAULT 0 COMMENT '角色: 0=用户, 1=管理员',
+    `status`        tinyint(1) DEFAULT 1 COMMENT '状态: 0=禁用, 1=启用',
     `deletion_time` bigint(20) DEFAULT '0' COMMENT '注销时间戳',
     `create_time`   datetime                                 DEFAULT NULL COMMENT '创建时间',
     `update_time`   datetime                                 DEFAULT NULL COMMENT '修改时间',

@@ -66,7 +66,8 @@ Service     ──  业务逻辑编排，事务管理
 
 ```
 HTTP Request
-  → JwtInterceptor (提取用户信息 → UserContext ThreadLocal)
+  → JwtInterceptor (order=1, 提取用户信息 → UserContext ThreadLocal)
+  → AdminInterceptor (order=2, 仅 /admin/** 路径，校验 role=1)
   → Controller
   → ChainContext.handler(ChainMark, RequestDTO)    // 责任链参数校验
   → Service (业务逻辑)
@@ -160,8 +161,9 @@ POST /auth/login
   → ChainContext.handler(AUTH_LOGIN, reqDTO)    // 参数非空校验
   → AuthServiceImpl:
       1. 查 User 表 (phone 匹配)
-      2. DelegatingPasswordEncoder.matches()  // {bcrypt} / {noop}
-      3. JwtUtil.generateToken(userId, username, phone)
+      2. 校验用户状态 (status=0 则拒绝登录)
+      3. DelegatingPasswordEncoder.matches()  // {bcrypt} / {noop}
+      4. JwtUtil.generateToken(userId, username, phone, role)
   → LoginRespDTO { token, userId, username, phone }
 ```
 
@@ -175,16 +177,24 @@ POST /auth/register
 
 ```
 请求 Authorization: Bearer <token>
-  → JwtInterceptor.preHandle()
+  → JwtInterceptor.preHandle() (order=1)
     1. 提取 Bearer token
     2. JwtUtil.parseToken()  → Claims
-    3. 构建 UserInfo { userId, username, phone }
+    3. 构建 UserInfo { userId, username, phone, role }
     4. UserContext.set(userInfo)
   → 业务代码通过 UserContext.get() 获取当前用户
   → JwtInterceptor.afterCompletion() → UserContext.clear()
-```
 
-**拦截路径**: `/**` (**排除** `/auth/login`, `/auth/register`, `/ticket/**`, `/order/pay/notify`, `/mock-pay/**`)
+请求 /admin/**
+  → JwtInterceptor (order=1)  → 认证通过
+  → AdminInterceptor (order=2) → 校验 UserContext.get().role == 1
+  → 非管理员抛出 ClientException("无管理员权限")
+
+**拦截路径**:
+  - `JwtInterceptor`: `/**` (**排除** `/auth/login`, `/auth/register`, `/ticket/**`, `/order/pay/notify`, `/mock-pay/**`)
+  - `AdminInterceptor`: `/admin/**` (order=2，位于 JwtInterceptor 之后)
+
+**角色体系**: `t_user.role` (TINYINT, 0=用户, 1=管理员) + `t_user.status` (TINYINT, 0=禁用, 1=启用)。JWT 增加 `role` claim，`UserInfo` 增加 `role` 字段。
 
 **JWT 配置**: HS256 签名，密钥和过期时间通过 `jwt.secret` / `jwt.expiration` 配置（默认 86400s）。
 
@@ -284,7 +294,7 @@ t_passenger (乘车人，独立于用户)
 
 | 表 | 说明 |
 |---|---|
-| `t_user` | 用户（注册/登录） |
+| `t_user` | 用户（注册/登录，含 role 角色字段和 status 启用/禁用状态） |
 | `t_train` | 列车（车次、类型、品牌、起终点） |
 | `t_train_station` | 列车区间时刻（经停车站的到发时间） |
 | `t_train_station_relation` | 列车-站点关系（起终点→可乘车次查询） |
@@ -739,6 +749,219 @@ public enum PayStatusEnum {
 
 ---
 
+### 3.11 管理后台 (Admin API)
+
+管理后台提供列车、站点、区域、订单、用户的全套管理接口。所有接口需管理员权限（role=1），由 `AdminInterceptor` (order=2) 统一拦截 `/admin/**`。
+
+#### 模块结构
+
+```
+controller/admin/
+├── AdminRegionController.java     # /admin/region  区域 CRUD
+├── AdminStationController.java    # /admin/station 站点 CRUD
+├── AdminTrainController.java      # /admin/train   列车管理 + 路线配置 + 克隆 + 晚点
+├── AdminOrderController.java      # /admin/order   订单查询 + 手动取消/退票
+└── AdminUserController.java       # /admin/user    用户查询 + 启用/禁用
+
+service/admin/
+├── AdminRegionService.java / impl/
+├── AdminStationService.java / impl/
+├── AdminTrainService.java / impl/       # 核心，含路线变更安全、克隆、晚点
+├── AdminOrderService.java / impl/
+└── AdminUserService.java / impl/
+
+service/handler/train/
+├── TrainStationChangeChecker.java       # 路线变更类型检测（6 种变更类型）
+└── TrainStationRelationGenerator.java   # 站点直达关系自动生成 C(n,2)
+```
+
+#### 路线变更安全机制
+
+管理后台对列车路线的修改需要特殊处理——每条路线的 seat_bitmap 用段索引作为 bit 位，插入/删除中间站会导致所有后续 bit 位移位，已有 `seat_bitmap` 和 `purchaseMask` 数据语义错乱。
+
+**变更检测与安全矩阵**:
+
+`TrainStationChangeChecker.detect(oldNames, newNames)` 比较新旧站名序列，识别 6 种变更类型：
+
+| 变更类型 | 检测条件 | 有活跃订单时 |
+|---------|---------|-------------|
+| `METADATA_ONLY` | 新旧站名序列完全一致 | ✅ 允许（仅更新时间/名称） |
+| `APPEND` | 新序列 = 旧序列 + 末尾新站 | ✅ 允许（新 bit 位在已有 seat_bitmap 中天然为 0） |
+| `DELETE_END` | 新序列 = 旧序列去掉末尾 | ⚠️ 检查被删段无 ticket 覆盖 |
+| `INSERT_MIDDLE` | 新序列更长但非末尾追加 | ❌ 禁止 → 引导克隆 |
+| `DELETE_MIDDLE` | 新序列更短但非末尾删除 | ❌ 禁止 → 引导克隆 |
+| `REORDER` | 大小相同但站名不同 | ❌ 禁止 → 引导克隆 |
+
+**为何 APPEND 安全**：末尾追加时新 bit 位在已有 `seat_bitmap` 中天然为 0，旧 `purchaseMask` 不变，`(seat_bitmap & mask) = 0` 检查不受影响。
+
+**为何中间插入危险**：插入站将原一个段拆分为两个新段，后续所有 bit 索引后移，已有 `seat_bitmap` 和 `purchaseMask` 的语义全部错乱。
+
+#### 克隆列车工作流
+
+当有活跃订单的列车需要中间插入/删除站点时，使用"克隆 + 冻结旧车"工作流，整个操作在 `@Transactional` 中执行：
+
+```
+POST /admin/train/{id}/clone { trainNumber, stations[] }
+  ├─ 1. 查原 Train
+  ├─ 2. 雪花生成 newTrainId
+  ├─ 3. INSERT t_train (newId, 新 trainNumber, sale_status=0)
+  ├─ 4. INSERT t_train_station (新路线，序列重新编号)
+  ├─ 5. INSERT t_carriage (复制，train_id=newId)
+  ├─ 6. INSERT t_seat (复制，train_id=newId, seat_bitmap=0, seat_status=AVAILABLE)
+  ├─ 7. generateRelations(newId) → INSERT t_train_station_relation C(n,2)
+  ├─ 8. copyPrices(oldId, newId) → INSERT t_train_station_price
+  ├─ 9. UPDATE t_train SET sale_status=1 WHERE id=oldId   ← 冻结旧车
+  └─ 10. 清除 Redis 缓存
+```
+
+冻结后：旧车 `sale_status=1` 不再出现在余票查询中，但退票/改签/候补匹配仍按 `train_id` 走旧路线，数据自洽。新候补自然流向 `sale_status=0` 的新列车。
+
+#### 候补队列处理
+
+冻结列车时，旧候补留在原 `train_id`，**不自动转移**到新列车。理由：
+- 新列车路线与旧车不同，候补的起止站在新旧路线下对应的 mask 可能不同，转移会产生隐蔽 bug
+- 新列车没有已售座位，"候补等退票"的场景不存在，用户应直接下单
+- 旧车退票仍可触发 `triggerMatch()` 匹配旧候补
+
+#### 晚点接口
+
+`POST /admin/train/{id}/delay` 独立于时刻表调整 (`PUT /admin/train/{id}`)，语义不同：
+
+| | 时刻表调整 | 运营晚点 |
+|---|---|---|
+| 触发时机 | 新时刻表发布 | 当天实时调整 |
+| 影响 | 未来售票 | 已购票乘客行程 |
+| 扩展预留 | — | 通知乘客、免费退票联动 |
+
+晚点操作更新三层表的时间字段：`t_train` → `t_train_station` → `t_train_station_relation`，并清除 Redis 缓存。
+
+#### t_seat.price 字段废弃
+
+`t_seat.price` DB 列标记废弃（不物理删除，向后兼容），票价以 `t_train_station_price` 为唯一来源。
+
+**理由**: 同一座位在不同区间下价格不同（北京南→济南西 vs 北京南→宁波），存一个固定值无意义。现实中 12306 票价由"运营里程 × 递远递减费率"决定，不由座位决定。
+
+**影响**:
+- `TicketServiceImpl.setSeatPrices()` 在内存中从 `t_train_station_price` 覆盖 `seat.price`
+- `SeatSelector.getPrice()` 查 `t_train_station_price`
+- 管理后台新增/修改票价时仅写 `t_train_station_price`
+
+#### 方案演进：从冻结+克隆到版本化调度
+
+当前系统采用"冻结+克隆"方案处理路线变更——有订单时冻结旧车、克隆新车。这是一个工程上务实的选择，但也存在局限：旧车和新车是两个独立的 `t_train` 记录，`train_number` 重复可能造成混淆，无法表达"同一车次在不同日期有不同时刻表"的语义。
+
+**版本化调度方案** 是演进方向，核心思路是将"列车实体"与"列车时刻表版本"解耦：
+
+```
+当前模型:
+  t_train (id=1, train_number="G35", stations=[A,B,C,D])
+       ↓ 路线变更
+  t_train (id=1, sale_status=1) + t_train (id=2, train_number="G35-2", stations=[A,B,X,C,D])
+       ↑ 两条独立记录，无关联
+
+版本化模型:
+  t_train (id=1, train_number="G35")                    ← 列车本体（稳定标识）
+       │
+       ├── t_train_schedule (id=10, train_id=1, version=1, stations=[A,B,C,D], status=ACTIVE)
+       │    └── t_train_instance (schedule_id=10, date=2026-01-15)
+       │         └── t_seat (instance_id=..., seat_bitmap=...)
+       │
+       └── t_train_schedule (id=11, train_id=1, version=2, stations=[A,B,X,C,D], status=ACTIVE)
+            └── t_train_instance (schedule_id=11, date=2026-01-16)
+                 └── t_seat (instance_id=..., seat_bitmap=...)
+```
+
+**版本化的核心优势**：
+- **语义清晰**：G35 永远只有一个，v1 在 1月15日 运行旧路线，v2 在 1月16日 起运行新路线
+- **无需克隆**：新增 schedule version + 指定生效日期即可，旧日期的 instance 不受影响
+- **历史可追溯**：保留完整时刻表演进历史，可查询"G35 在 1月15日走什么路线"
+- **seat_bitmap 天然隔离**：每个 instance 有独立的 seat，不存在位图错乱问题
+
+**版本化需额外处理的复杂度**：
+- 订单不再关联 `train_id`，而是关联 `train_instance_id`（或 `schedule_id + date`）
+- 候补队列需按 instance 维度隔离
+- 余票查询需先解析"某日期某车次 → 哪个 schedule version → 哪个 instance"
+- 改签跨日期时，可能跨 schedule version，需校验新旧路线兼容性
+
+**为什么当前不采用版本化**：对于一个面试项目，冻结+克隆方案已足够展示对位图问题和并发安全的理解。版本化方案更适合在面试中作为"架构演进思考"来阐述——先讲清楚当前方案的 trade-off，再自然引出如果扩展会怎么做。
+
+---
+
+#### 12306 实际方案参考
+
+12306 的座位管理远比当前项目复杂，但其核心思路与位图模型一脉相承。理解 12306 的做法有助于在面试中展示行业认知。
+
+**12306 的数据模型**：
+
+```
+列车 ≠ 一个数据库记录
+列车 = 车次号 + 运行日期 + 编组（车厢数/座位数） + 线路时刻表
+
+关键概念：
+  - 车次号 (Train Code): "G35"，面向乘客的标识
+  - 运行图 (Schedule Graph): 特定日期/时间段内所有车次的时刻表集合
+  - 编组 (Consist): 该车次当天挂载的车厢列表（可能每天不同，如节假日加挂车厢）
+  - 停站序列 (Stop Sequence): 按顺序排列的经停车站，每个相邻段为一个"区间段"
+```
+
+**12306 如何避免位图错乱**：
+
+```
+12306 的做法是"按日期实例化"，天然不存在我们当前系统的"路线变更导致位图错乱"问题：
+
+  车次 G35
+    ├── 2026-01-15 实例 → 路线 v1 (4段) → 独立的座位库存池
+    ├── 2026-01-16 实例 → 路线 v2 (5段, 新增徐州东) → 另一个独立的座位库存池
+    └── 2026-01-17 实例 → 路线 v2 (5段) → 再一个独立的库存池
+
+  - 每天的车次是一个独立的库存单元，有自己独立的 seat_bitmap
+  - 路线变更只需影响"未来的日期实例"，历史实例不受影响
+  - 不同日期的同一车次，座位互不干扰，位图互不影响
+```
+
+**12306 的库存存储**：
+
+12306 使用的是分布式内存数据库（如自研的 GemFire/Geode 变体），座位库存结构大致为：
+
+```
+Key:   (train_code, date, segment_index)
+Value: Map<seat_type, available_count>
+
+示例:
+  ("G35", "2026-01-15", 0)  → { "二等座": 450, "一等座": 120, "商务座": 24 }
+  ("G35", "2026-01-15", 1)  → { "二等座": 445, "一等座": 118, "商务座": 24 }
+  ...
+
+查询 北京南→南京南 (段 0+1):
+  min(段0的可用数, 段1的可用数) = min(445, 440) = 440 张可用
+```
+
+12306 不存储每张座位每段的位图（那样 8 节车厢 × 100 座 × N 段 = 太多行），而是**按段汇总**，将每个段的各座位类型可用数作为原子库存单元。下单时扣减涉及的所有段，退票时回滚。这种设计牺牲了"自选座位"的能力（12306 早期不支持自选座位，后来才逐步开放），换来了极高的查询和扣减性能。
+
+**对比总结**：
+
+```
+┌────────────────────┬──────────────────┬──────────────────────┐
+│ 维度                │ 当前项目 (位图)    │ 12306 (按段汇总)      │
+├────────────────────┼──────────────────┼──────────────────────┤
+│ 粒度               │ 座位级 (每座一行)  │ 段级 (每段一汇总数)   │
+│ 支持自选座          │ ✅ 天然支持       │ ⚠️ 需额外结构         │
+│ 查询性能            │ O(座位数)         │ O(1) 读汇总值         │
+│ 扣减性能            │ 位图 CAS 单行     │ 多段多行原子扣减       │
+│ 数据量              │ 高 (座位数×1行)   │ 低 (段数×座位类型数)   │
+│ 路线变更隔离         │ 冻结+克隆        │ 按日期实例天然隔离     │
+│ 复杂度              │ 中等             │ 高 (分布式事务)        │
+└────────────────────┴──────────────────┴──────────────────────┘
+```
+
+面试时可以这样组织答案：
+
+1. **当前方案**："我用了位图模型，每座位一行，bit 位对应相邻段，CAS 原子锁定。路线变更时冻结+克隆，旧票的 purchaseMask 落盘保留，退票释放不走重新计算。"
+2. **方案演进**："如果扩展到类似 12306 的规模，我会引入调度版本化——车次是稳定实体，每天的运行实例关联一个调度版本，不同日期的座位库存天然隔离，路线变更只影响未来实例。"
+3. **行业认知**："12306 实际用的是按段汇总库存而非每座一行，牺牲了选座灵活性换来了极高的查询性能。选座是后来通过额外的座位图服务逐步叠加的。"
+
+---
+
 ## 4. API 接口
 
 | 方法 | 路径 | 说明 | 认证 |
@@ -763,6 +986,39 @@ public enum PayStatusEnum {
 | POST | `/user/change-password` | 修改密码 | 是 |
 | POST | `/user/delete` | 注销账号（软删除） | 是 |
 | GET | `/order/list` | 订单列表分页查询（支持状态/日期/车次筛选） | 是 |
+| — | **管理后台** | | **管理员** |
+| GET | `/admin/region/page` | 区域分页列表 | 管理员 |
+| POST | `/admin/region` | 新增区域（刷新 Redis 缓存） | 管理员 |
+| PUT | `/admin/region/{id}` | 修改区域 | 管理员 |
+| DELETE | `/admin/region/{id}` | 删除区域（检查引用） | 管理员 |
+| GET | `/admin/station/page` | 站点分页列表 | 管理员 |
+| POST | `/admin/station` | 新增站点 | 管理员 |
+| PUT | `/admin/station/{id}` | 修改站点 | 管理员 |
+| DELETE | `/admin/station/{id}` | 删除站点（检查路线引用） | 管理员 |
+| GET | `/admin/train/page` | 列车分页列表（按车次/类型筛选） | 管理员 |
+| POST | `/admin/train` | 新增列车 | 管理员 |
+| PUT | `/admin/train/{id}` | 修改列车元数据（活跃订单时拒绝时间变更） | 管理员 |
+| DELETE | `/admin/train/{id}` | 删除列车（无订单物理删，有订单软删） | 管理员 |
+| PUT | `/admin/train/{id}/stations` | 设置路线（无订单时全量替换，有订单安全检查） | 管理员 |
+| POST | `/admin/train/{id}/stations/append` | 末尾追加停站 | 管理员 |
+| POST | `/admin/train/{id}/stations/insert` | 中间插入停站（有活跃订单拒绝） | 管理员 |
+| DELETE | `/admin/train/{id}/stations/{tsId}` | 删除停站 | 管理员 |
+| POST | `/admin/train/{id}/clone` | 克隆列车（含冻结旧车） | 管理员 |
+| GET | `/admin/train/{id}/carriages` | 车厢列表 | 管理员 |
+| POST | `/admin/train/{id}/carriage` | 新增车厢（自动生成座位） | 管理员 |
+| DELETE | `/admin/train/{id}/carriage/{cid}` | 删除车厢及座位 | 管理员 |
+| GET | `/admin/train/{id}/seats` | 座位列表 | 管理员 |
+| DELETE | `/admin/train/{id}/seat/{sid}` | 删除座位 | 管理员 |
+| GET | `/admin/train/{id}/prices` | 票价列表 | 管理员 |
+| PUT | `/admin/train/{id}/prices/batch` | 批量设置票价（upsert） | 管理员 |
+| POST | `/admin/train/{id}/delay` | 运营晚点（更新所有关联时间） | 管理员 |
+| GET | `/admin/order/page` | 订单分页列表（按状态/车次/用户/日期） | 管理员 |
+| GET | `/admin/order/{orderSn}` | 订单详情 | 管理员 |
+| POST | `/admin/order/{orderSn}/cancel` | 手动取消订单 | 管理员 |
+| POST | `/admin/order/{orderSn}/refund` | 手动退票 | 管理员 |
+| GET | `/admin/user/page` | 用户分页列表（关键字/role 筛选，脱敏） | 管理员 |
+| GET | `/admin/user/{id}` | 用户详情（密码不返回，身份证脱敏） | 管理员 |
+| PUT | `/admin/user/{id}/status` | 启用/禁用用户 | 管理员 |
 
 ---
 

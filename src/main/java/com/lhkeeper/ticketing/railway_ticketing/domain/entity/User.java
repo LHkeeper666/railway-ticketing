@@ -98,6 +98,18 @@ public class User extends BaseEntity {
     private String address;
 
     /**
+     * 角色: 0=用户, 1=管理员
+     */
+    @TableField("role")
+    private Integer role;
+
+    /**
+     * 状态: 0=禁用, 1=启用
+     */
+    @TableField("status")
+    private Integer status;
+
+    /**
      * 注销时间戳
      */
     @TableField("deletion_time")
