@@ -7,9 +7,12 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PayInfoDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Order;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.Pay;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStateEvent;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.statemachine.OrderStateMachine;
+import com.lhkeeper.ticketing.railway_ticketing.domain.statemachine.TransitResult;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.OrderItemMapper;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.OrderMapper;
@@ -46,6 +49,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final TicketMapper ticketMapper;
     private final SnowflakeUtil snowflakeUtil;
     private final AbstractChainContext<PayCallbackReqDTO> payNotifyChainContext;
+    private final OrderStateMachine stateMachine;
 
     private Map<String, PaymentStrategy> strategyMap;
 
@@ -89,16 +93,19 @@ public class PaymentServiceImpl implements PaymentService {
             return;
         }
 
-        // CAS: UNPAID → PAID
-        int updated = orderMapper.update(null,
-                Wrappers.lambdaUpdate(Order.class)
-                        .eq(Order::getOrderSn, orderSn)
-                        .eq(Order::getStatus, OrderStatusEnum.UNPAID.getCode())
-                        .set(Order::getStatus, OrderStatusEnum.PAID.getCode())
-                        .set(Order::getPayTime, LocalDateTime.now())
-        );
+        // 状态机: UNPAID → PAID（合法性校验 + CAS + 审计 + MQ）
+        TransitResult r = stateMachine.transition(orderSn,
+                OrderStatusEnum.UNPAID.getCode(), OrderStatusEnum.PAID.getCode(),
+                OrderStateEvent.PAY_NOTIFY, "SYSTEM");
 
-        if (updated > 0) {
+        if (r.isSuccess()) {
+            // 额外字段 payTime 由调用方更新
+            orderMapper.update(null,
+                    Wrappers.lambdaUpdate(Order.class)
+                            .eq(Order::getOrderSn, orderSn)
+                            .set(Order::getPayTime, LocalDateTime.now())
+            );
+            // 关联表副作用
             orderItemMapper.update(null,
                     Wrappers.lambdaUpdate(com.lhkeeper.ticketing.railway_ticketing.domain.entity.OrderItem.class)
                             .eq(com.lhkeeper.ticketing.railway_ticketing.domain.entity.OrderItem::getOrderSn, orderSn)
@@ -114,30 +121,20 @@ public class PaymentServiceImpl implements PaymentService {
             return;
         }
 
-        // CAS 失败 → 重新读取当前状态
-        Order order = orderMapper.selectOne(
-                Wrappers.lambdaQuery(Order.class)
-                        .eq(Order::getOrderSn, orderSn)
-        );
-        if (order == null) {
-            log.warn("支付回调-订单不存在, orderSn={}", orderSn);
-            throw new ClientException("订单不存在");
-        }
-
-        Integer currentStatus = order.getStatus();
-        if (OrderStatusEnum.PAID.getCode().equals(currentStatus)) {
+        // CAS 冲突 → TransitResult 已携带 DB 最新状态
+        if (OrderStatusEnum.PAID.getCode().equals(r.getCurrentStatus())) {
             log.info("支付回调-订单已支付（幂等）, orderSn={}", orderSn);
             saveOrUpdatePay(reqDTO, PayStatusEnum.SUCCESS.getCode());
             return;
         }
 
-        if (OrderStatusEnum.CANCELED.getCode().equals(currentStatus)) {
+        if (OrderStatusEnum.CANCELED.getCode().equals(r.getCurrentStatus())) {
             log.warn("支付回调-订单已取消，记录待退款, orderSn={}", orderSn);
             saveOrUpdatePay(reqDTO, PayStatusEnum.PENDING_REFUND.getCode());
             return;
         }
 
-        log.warn("支付回调-订单状态异常, orderSn={}, status={}", orderSn, currentStatus);
+        log.warn("支付回调-订单状态异常, orderSn={}, status={}", orderSn, r.getCurrentStatus());
         throw new ClientException("订单状态异常");
     }
 

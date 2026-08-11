@@ -14,6 +14,7 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.WaitlistCreateRe
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.WaitlistDetailRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.*;
+import com.lhkeeper.ticketing.railway_ticketing.domain.statemachine.OrderStateMachine;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
@@ -66,6 +67,7 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
     private final RabbitTemplate rabbitTemplate;
     private final DistributedLockFactory lockFactory;
     private final AbstractChainContext<WaitlistCreateReqDTO> waitlistCreateChainContext;
+    private final OrderStateMachine stateMachine;
 
     @Transactional(rollbackFor = Throwable.class)
     @Override
@@ -336,13 +338,10 @@ public class WaitlistServiceImpl extends ServiceImpl<WaitlistMapper, Waitlist> i
             ticketMapper.insert(ticket);
         }
 
-        // Order: WAITLIST → UNPAID (CAS)
-        orderMapper.update(null,
-                Wrappers.lambdaUpdate(Order.class)
-                        .eq(Order::getOrderSn, orderSn)
-                        .eq(Order::getStatus, OrderStatusEnum.WAITLIST.getCode())
-                        .set(Order::getStatus, OrderStatusEnum.UNPAID.getCode())
-        );
+        // 状态机: WAITLIST → UNPAID
+        stateMachine.transition(orderSn,
+                OrderStatusEnum.WAITLIST.getCode(), OrderStatusEnum.UNPAID.getCode(),
+                OrderStateEvent.WAITLIST_MATCH, "SYSTEM");
 
         // Pay: FROZEN → SUCCESS (CAS)
         payMapper.update(null,

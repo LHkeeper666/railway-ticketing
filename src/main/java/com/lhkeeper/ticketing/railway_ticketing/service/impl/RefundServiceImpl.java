@@ -6,10 +6,14 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.RouteDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.req.RefundReqDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.RefundRespDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
+import com.lhkeeper.ticketing.railway_ticketing.context.UserContext;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStateEvent;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.statemachine.OrderStateMachine;
+import com.lhkeeper.ticketing.railway_ticketing.domain.statemachine.TransitResult;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
@@ -55,6 +59,7 @@ public class RefundServiceImpl implements RefundService {
     private final TrainStationService trainStationService;
     private final StringRedisTemplate stringRedisTemplate;
     private final AbstractChainContext<RefundReqDTO> refundChainContext;
+    private final OrderStateMachine stateMachine;
     @Lazy
     @Autowired
     private WaitlistService waitlistService;
@@ -181,13 +186,11 @@ public class RefundServiceImpl implements RefundService {
                         .eq(Ticket::getTicketStatus, TicketStatusEnum.PAID.getCode())
         );
         if (remainingPaid == 0) {
-            int orderUpdated = orderMapper.update(null,
-                    Wrappers.lambdaUpdate(Order.class)
-                            .eq(Order::getOrderSn, orderSn)
-                            .eq(Order::getStatus, OrderStatusEnum.PAID.getCode())
-                            .set(Order::getStatus, OrderStatusEnum.CANCELED.getCode())
-            );
-            if (orderUpdated > 0) {
+            TransitResult r = stateMachine.transition(orderSn,
+                    OrderStatusEnum.PAID.getCode(), OrderStatusEnum.CANCELED.getCode(),
+                    OrderStateEvent.REFUND_ALL,
+                    String.valueOf(UserContext.get().getUserId()));
+            if (r.isSuccess()) {
                 payMapper.update(null,
                         Wrappers.lambdaUpdate(Pay.class)
                                 .eq(Pay::getOrderSn, orderSn)

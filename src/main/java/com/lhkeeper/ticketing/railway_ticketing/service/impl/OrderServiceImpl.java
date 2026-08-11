@@ -27,10 +27,13 @@ import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PayInfoDTO;
 import com.lhkeeper.ticketing.railway_ticketing.domain.dto.resp.PayCreateResult;
 import com.lhkeeper.ticketing.railway_ticketing.domain.entity.*;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.ChainMarkEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStateEvent;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.OrderStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.PayStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.SeatStatusEnum;
 import com.lhkeeper.ticketing.railway_ticketing.domain.enums.TicketStatusEnum;
+import com.lhkeeper.ticketing.railway_ticketing.domain.statemachine.OrderStateMachine;
+import com.lhkeeper.ticketing.railway_ticketing.domain.statemachine.TransitResult;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ClientException;
 import com.lhkeeper.ticketing.railway_ticketing.exception.ServiceException;
 import com.lhkeeper.ticketing.railway_ticketing.mapper.*;
@@ -99,6 +102,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     private final RabbitTemplate rabbitTemplate;
     private final TicketServiceImpl ticketServiceImpl;
     private final OrderItemServiceImpl orderItemServiceImpl;
+    private final OrderStateMachine stateMachine;
     @Lazy
     @Autowired
     private WaitlistService waitlistService;
@@ -333,16 +337,21 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
             orderItemServiceImpl.saveBatch(orderItems);
             ticketServiceImpl.saveBatch(tickets);
-            order.setStatus(OrderStatusEnum.UNPAID.getCode());
-            orderMapper.updateById(order);
+
+            // 状态机: PENDING → UNPAID
+            stateMachine.transition(orderSn,
+                    OrderStatusEnum.PENDING.getCode(), OrderStatusEnum.UNPAID.getCode(),
+                    OrderStateEvent.FLASH_SUCCEED, "SYSTEM");
 
             sendOrderTimeoutMessage(orderSn);
 
             log.info("抢票订单处理成功, orderSn={}", orderSn);
         } catch (ClientException e) {
             log.warn("抢票订单业务失败, orderSn={}, msg={}", orderSn, e.getMessage());
-            order.setStatus(OrderStatusEnum.CANCELED.getCode());
-            orderMapper.updateById(order);
+            // 状态机: PENDING → CANCELED
+            stateMachine.transition(orderSn,
+                    OrderStatusEnum.PENDING.getCode(), OrderStatusEnum.CANCELED.getCode(),
+                    OrderStateEvent.FLASH_FAIL, "SYSTEM");
         }
     }
 
@@ -540,7 +549,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         log.info("开始取消订单, orderSn={}, timeoutCancel={}", orderSn, timeoutCancel);
 
-        // 快照读（trainId/station 不可变，无需加锁）
         Order order = orderMapper.selectOne(
                 Wrappers.lambdaQuery(Order.class)
                         .eq(Order::getOrderSn, orderSn)
@@ -552,7 +560,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         Integer currentStatus = order.getStatus();
 
-        // 已取消 → 幂等
+        // 已取消 → 幂等（终态，无需状态机）
         if (OrderStatusEnum.CANCELED.getCode().equals(currentStatus)) {
             log.warn("取消订单-订单已取消, orderSn={}", orderSn);
             if (timeoutCancel) {
@@ -567,69 +575,37 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             return;
         }
 
-        // 手动取消时状态校验
-        if (!timeoutCancel
-                && !OrderStatusEnum.UNPAID.getCode().equals(currentStatus)
-                && !OrderStatusEnum.PAID.getCode().equals(currentStatus)
-                && !OrderStatusEnum.WAITLIST.getCode().equals(currentStatus)) {
-            throw new ClientException("订单状态不允许取消");
-        }
+        // 状态机统管：合法性校验 + CAS + 审计日志 + MQ 事件
+        OrderStateEvent cancelEvent = timeoutCancel ? OrderStateEvent.TIMEOUT_CANCEL : OrderStateEvent.CANCEL;
+        String operator = timeoutCancel ? "SYSTEM" : String.valueOf(UserContext.get().getUserId());
+        TransitResult r = stateMachine.transition(orderSn, currentStatus,
+                OrderStatusEnum.CANCELED.getCode(), cancelEvent, operator);
 
-        // CAS 1: PENDING → CANCELED（快速路径，无座位/Item/Ticket）
-        if (OrderStatusEnum.PENDING.getCode().equals(currentStatus)) {
-            int updated = orderMapper.update(null,
-                    Wrappers.lambdaUpdate(Order.class)
-                            .eq(Order::getOrderSn, orderSn)
-                            .eq(Order::getStatus, OrderStatusEnum.PENDING.getCode())
-                            .set(Order::getStatus, OrderStatusEnum.CANCELED.getCode())
-            );
-            if (updated > 0) {
-                log.info("超时取消-PENDING订单快速路径, orderSn={}", orderSn);
+        if (r.isSuccess()) {
+            // PENDING 快速路径，无座位/Item/Ticket
+            if (OrderStatusEnum.PENDING.getCode().equals(currentStatus)) {
+                log.info("取消订单-PENDING快速路径, orderSn={}", orderSn);
                 return;
             }
-            // CAS 失败，重新读取最新状态后递归重试一次
-            log.info("PENDING CAS 失败，重试, orderSn={}", orderSn);
-            cancelOrder(orderSn, timeoutCancel);
-            return;
-        }
-
-        // CAS 1.5: WAITLIST → CANCELED（快速路径，无座位锁定，清理 Waitlist + 退款）
-        if (OrderStatusEnum.WAITLIST.getCode().equals(currentStatus)) {
-            int updated = orderMapper.update(null,
-                    Wrappers.lambdaUpdate(Order.class)
-                            .eq(Order::getOrderSn, orderSn)
-                            .eq(Order::getStatus, OrderStatusEnum.WAITLIST.getCode())
-                            .set(Order::getStatus, OrderStatusEnum.CANCELED.getCode())
-            );
-            if (updated > 0) {
-                // 清理 Waitlist 记录 + Redis + 退款
+            // WAITLIST 快速路径，清理候补记录
+            if (OrderStatusEnum.WAITLIST.getCode().equals(currentStatus)) {
                 waitlistService.cleanUpWaitlistByOrderSn(orderSn);
                 log.info("取消订单-WAITLIST快速路径, orderSn={}", orderSn);
                 return;
             }
-            // CAS 失败，match 已推进到 UNPAID，递归重试
-            log.info("WAITLIST CAS 失败，重试, orderSn={}", orderSn);
+            // UNPAID/PAID → 完整副作用
+            executeCancelSideEffects(order, currentStatus);
+        } else {
+            // CAS 冲突，递归重试
+            log.info("取消订单 CAS 冲突，重试, orderSn={}, wasStatus={}", orderSn, currentStatus);
             cancelOrder(orderSn, timeoutCancel);
-            return;
         }
+    }
 
-        // CAS 2: UNPAID/PAID → CANCELED
+    private void executeCancelSideEffects(Order order, Integer currentStatus) {
+        String orderSn = order.getOrderSn();
         boolean wasPaid = OrderStatusEnum.PAID.getCode().equals(currentStatus);
-        int updated = orderMapper.update(null,
-                Wrappers.lambdaUpdate(Order.class)
-                        .eq(Order::getOrderSn, orderSn)
-                        .eq(Order::getStatus, currentStatus)
-                        .set(Order::getStatus, OrderStatusEnum.CANCELED.getCode())
-        );
-        if (updated == 0) {
-            // CAS 失败，重新读取最新状态后递归重试一次
-            log.info("取消订单 CAS 失败，重试, orderSn={}, wasStatus={}", orderSn, currentStatus);
-            cancelOrder(orderSn, timeoutCancel);
-            return;
-        }
 
-        // CAS 成功 → 执行副作用
-        // 位图释放座位：从 ticket 中读取落盘时的 purchaseMask，避免因列车站变更导致 mask 不一致
         List<Ticket> tickets = ticketMapper.selectList(
                 Wrappers.lambdaQuery(Ticket.class)
                         .eq(Ticket::getOrderSn, orderSn)
@@ -638,7 +614,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         for (Ticket ticket : tickets) {
             Long purchaseMask = ticket.getPurchaseMask();
             if (purchaseMask == null) {
-                // 兼容旧数据：重新计算 mask
                 purchaseMask = StationCalculateUtil.bitmapMask(
                         trainStations, order.getStartStation(), order.getEndStation());
             }
@@ -652,7 +627,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             );
         }
 
-        // 更新订单项和车票状态
         Integer itemStatus = wasPaid ? TicketStatusEnum.REFUNDED.getCode() : TicketStatusEnum.CLOSED.getCode();
         orderItemMapper.update(null,
                 Wrappers.lambdaUpdate(OrderItem.class)
@@ -665,7 +639,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                         .set(Ticket::getTicketStatus, itemStatus)
         );
 
-        // 已支付则更新 Pay 为 REFUNDED
         if (wasPaid) {
             payMapper.update(null,
                     Wrappers.lambdaUpdate(Pay.class)
@@ -674,7 +647,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             );
         }
 
-        // 失效全部重叠区间的余票缓存
         List<RouteDTO> takeoutRoutes = StationCalculateUtil.takeoutStation(
                 trainStations, order.getStartStation(), order.getEndStation());
         for (RouteDTO route : takeoutRoutes) {
@@ -685,7 +657,6 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         log.info("订单已取消, orderSn={}, wasPaid={}, itemStatus={}", orderSn, wasPaid, itemStatus);
 
-        // 释放座位后触发候补匹配（事务提交后执行，确保座位释放可见）
         Long triggerTrainId = order.getTrainId();
         String triggerStart = order.getStartStation();
         String triggerEnd = order.getEndStation();

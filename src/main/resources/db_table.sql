@@ -176,6 +176,20 @@ CREATE TABLE `t_order`
     KEY              `idx_order_sn` (`order_sn`) USING BTREE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单表';
 
+CREATE TABLE `t_order_state_log`
+(
+    `id`          bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',
+    `order_sn`    varchar(64) COLLATE utf8mb4_unicode_ci  NOT NULL COMMENT '订单号',
+    `from_status` int(3) NOT NULL COMMENT '转移前状态',
+    `to_status`   int(3) NOT NULL COMMENT '转移后状态',
+    `event`       varchar(32) COLLATE utf8mb4_unicode_ci  NOT NULL COMMENT '触发事件',
+    `operator`    varchar(64) COLLATE utf8mb4_unicode_ci  DEFAULT NULL COMMENT '操作人',
+    `remark`      varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '备注',
+    `create_time` datetime NOT NULL COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    KEY           `idx_order_sn` (`order_sn`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单状态变更日志';
+
 CREATE TABLE `t_order_item`
 (
     `id`              bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'ID',

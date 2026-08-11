@@ -44,6 +44,12 @@ public class RabbitMQConfig {
     public static final String WAITLIST_MATCH_DLQ = "waitlist.match.dlq";
     public static final String WAITLIST_MATCH_DLX = "waitlist.match.dlx";
 
+    // ==================== Order Status Event ====================
+
+    public static final String ORDER_STATUS_QUEUE = "order.status.queue";
+    public static final String ORDER_STATUS_EXCHANGE = "order.status.exchange";
+    public static final String ORDER_STATUS_ROUTING_KEY = "order.status.changed";
+
     @Bean
     public Queue flashOrderQueue() {
         return QueueBuilder.durable(FLASH_ORDER_QUEUE)
@@ -180,6 +186,25 @@ public class RabbitMQConfig {
         RabbitTemplate template = new RabbitTemplate(connectionFactory);
         template.setMessageConverter(fastjsonMessageConverter());
         return template;
+    }
+
+    // ==================== Order Status Event Beans ====================
+
+    @Bean
+    public Queue orderStatusQueue() {
+        return new Queue(ORDER_STATUS_QUEUE, true);
+    }
+
+    @Bean
+    public DirectExchange orderStatusExchange() {
+        return new DirectExchange(ORDER_STATUS_EXCHANGE);
+    }
+
+    @Bean
+    public Binding orderStatusBinding() {
+        return BindingBuilder.bind(orderStatusQueue())
+                .to(orderStatusExchange())
+                .with(ORDER_STATUS_ROUTING_KEY);
     }
 
     @Bean
